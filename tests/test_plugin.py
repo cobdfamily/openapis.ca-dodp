@@ -795,6 +795,175 @@ async def test_list_bookshelf_announces_multiple_formats(install_transport):
     assert 12003 in fmt_ids
 
 
+async def test_list_bookshelf_filters_formats_to_actual_resources(install_transport):
+    """v0.8: list_bookshelf fires a parallel
+    getContentResources probe per book and filters each
+    BookRecord.formats list down to formats the upstream
+    actually carries. Pin that a book with ONLY mp3 surfaces
+    just the MP3 FormatEntry (not the default mp3+zip set)."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getContentList" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getContentListResponse xmlns="{DNS}">'
+                    f'  <contentList id="issued">'
+                    f'    <contentItem id="con-mp3-only">'
+                    f'      <label><text>Mp3-only</text></label>'
+                    f'    </contentItem>'
+                    f'    <contentItem id="con-both">'
+                    f'      <label><text>Both</text></label>'
+                    f'    </contentItem>'
+                    f'  </contentList>'
+                    f'</getContentListResponse>'
+                ),
+            )
+        if "getContentResources" in body:
+            if "con-mp3-only" in body:
+                return httpx.Response(
+                    200,
+                    text=soap_envelope(
+                        f'<getContentResourcesResponse xmlns="{DNS}">'
+                        f'  <resources>'
+                        f'    <resource uri="https://cdn.example/m.mp3" mimeType="audio/mpeg" size="1"/>'
+                        f'  </resources>'
+                        f'</getContentResourcesResponse>'
+                    ),
+                )
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getContentResourcesResponse xmlns="{DNS}">'
+                    f'  <resources>'
+                    f'    <resource uri="https://cdn.example/b.mp3" mimeType="audio/mpeg" size="1"/>'
+                    f'    <resource uri="https://cdn.example/b.zip" mimeType="application/zip" size="1"/>'
+                    f'  </resources>'
+                    f'</getContentResourcesResponse>'
+                ),
+            )
+        raise AssertionError(body[:80])
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    await plugin.authenticate("alice", "pw")
+    books = await plugin.list_bookshelf("alice")
+    by_title = {b.title: [f.id for f in b.formats] for b in books}
+    assert by_title["Mp3-only"] == [12000]
+    assert sorted(by_title["Both"]) == [12000, 12003]
+
+
+async def test_list_bookshelf_falls_back_when_probe_fails(install_transport):
+    """If a per-book resource probe faults, the book keeps the
+    static ANNOUNCED_FORMATS list rather than disappearing.
+    Better to show a clickable option that 404s than to lose
+    the book entirely on a transient upstream blip."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getContentList" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getContentListResponse xmlns="{DNS}">'
+                    f'  <contentList id="issued">'
+                    f'    <contentItem id="con-broken">'
+                    f'      <label><text>X</text></label>'
+                    f'    </contentItem>'
+                    f'  </contentList>'
+                    f'</getContentListResponse>'
+                ),
+            )
+        if "getContentResources" in body:
+            return httpx.Response(200, text=soap_fault("temporary failure"))
+        raise AssertionError(body[:80])
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    await plugin.authenticate("alice", "pw")
+    books = await plugin.list_bookshelf("alice")
+    assert len(books) == 1
+    # Fallback formats are the announced superset.
+    fmt_ids = sorted(f.id for f in books[0].formats)
+    assert fmt_ids == [12000, 12003]
+
+
+async def test_download_reuses_cached_resources(install_transport, tmp_path: Path):
+    """v0.8: list_bookshelf populated the resource cache, so a
+    subsequent download must NOT re-issue getContentResources.
+    The hot path stays a single resource-URL GET."""
+    resource_probes = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal resource_probes
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getContentList" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getContentListResponse xmlns="{DNS}">'
+                    f'  <contentList id="issued">'
+                    f'    <contentItem id="con-cache"><label><text>C</text></label></contentItem>'
+                    f'  </contentList>'
+                    f'</getContentListResponse>'
+                ),
+            )
+        if "getContentResources" in body:
+            resource_probes += 1
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getContentResourcesResponse xmlns="{DNS}">'
+                    f'  <resources>'
+                    f'    <resource uri="https://cdn.example/c.mp3" mimeType="audio/mpeg" size="1"/>'
+                    f'  </resources>'
+                    f'</getContentResourcesResponse>'
+                ),
+            )
+        if not body:
+            return httpx.Response(200, content=b"bytes")
+        raise AssertionError(body[:80])
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    await plugin.authenticate("alice", "pw")
+    books = await plugin.list_bookshelf("alice")
+    # The probe ran once at list time.
+    assert resource_probes == 1
+    out = await plugin.download(
+        "alice", fmt=12000, node_id=books[0].id, cache_dir=tmp_path,
+    )
+    assert out is not None
+    # download() reused the cache instead of re-probing.
+    assert resource_probes == 1
+
+
 async def test_download_picks_resource_matching_requested_fmt(install_transport, tmp_path: Path):
     """When the user asks for fmt=12003 (DAISY ZIP), the plugin
     must pick the application/zip resource, not the first audio

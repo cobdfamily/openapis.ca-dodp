@@ -54,10 +54,23 @@ class UserSession:
     """One DODP session per Hummingbird user: an httpx client with
     the server's session cookie + the id map. ``http`` is
     constructed lazily by the plugin so this dataclass can be
-    cheap to instantiate at registration time."""
+    cheap to instantiate at registration time.
+
+    ``resources`` (v0.8) caches per-book resource lists keyed by
+    DODP contentID. Filled in by ``list_bookshelf`` (fires a
+    parallel ``getContentResources`` probe per book) so the
+    BookRecord.formats list reflects each book's actual catalog
+    rather than an optimistic static superset. ``download``
+    reads through the cache, avoiding a redundant probe on the
+    hot path.
+    """
 
     http: httpx.AsyncClient
     ids: IdMap = field(default_factory=IdMap)
+    # Keyed by DODP content_id (string). Value type is
+    # client.ContentResource but we keep it untyped here to
+    # dodge an import cycle with client.py.
+    resources: dict[str, list] = field(default_factory=dict)
 
 
 _sessions: dict[str, UserSession] = {}

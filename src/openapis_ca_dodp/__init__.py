@@ -6,7 +6,7 @@ Public surface: ``OpenapisDodpPlugin`` (registered via the
 
 from __future__ import annotations
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 from .plugin import OpenapisDodpPlugin
 

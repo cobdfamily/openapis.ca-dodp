@@ -27,6 +27,7 @@ the life of one Hummingbird process.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from hummingbird.plugins import Plugin
 from . import config, sessions
 from .client import (
     Announcement,
+    ContentItem,
     ContentResource,
     DodpAuthFault,
     DodpClient,
@@ -328,22 +330,70 @@ class OpenapisDodpPlugin(Plugin):
                 username, exc.faultstring,
             )
             return []
+
+        # v0.8: fill the per-book resource cache for any books we
+        # haven't probed yet. Parallel fan-out so a 30-book
+        # bookshelf doesn't sequentially round-trip 30 times.
+        await self._populate_resource_cache(username, sess, items)
+
         out: list[BookRecord] = []
-        format_entries = [
-            FormatEntry(id=fid, label=FORMAT_MAP[fid][1], narrator=None)
-            for fid in ANNOUNCED_FORMATS
-            if fid in FORMAT_MAP
-        ]
         for item in items:
             node_id = sess.ids.to_int(item.content_id)
             out.append(
                 BookRecord(
                     id=node_id,
                     title=item.label or item.content_id,
-                    formats=list(format_entries),
+                    formats=_format_entries_for(
+                        sess.resources.get(item.content_id),
+                    ),
                 ),
             )
         return out
+
+    async def _populate_resource_cache(
+        self,
+        username: str,
+        sess: sessions.UserSession,
+        items: list[ContentItem],
+    ) -> None:
+        """Probe getContentResources for any content_ids not yet
+        in sess.resources. Runs the probes in parallel; failures
+        leave the cache entry absent so the fallback static-
+        format-set kicks in for the affected book.
+        """
+        missing = [
+            item.content_id
+            for item in items
+            if item.content_id not in sess.resources
+        ]
+        if not missing:
+            return
+        # Cap fan-out at a reasonable parallelism so a very
+        # large bookshelf doesn't open hundreds of sockets at
+        # once. asyncio.Semaphore would be ideal here but for
+        # v0.8 we cap by issuing in chunks.
+        chunk_size = 8
+        for start in range(0, len(missing), chunk_size):
+            chunk = missing[start : start + chunk_size]
+            results = await asyncio.gather(
+                *(
+                    self._client.get_content_resources(sess.http, cid)
+                    for cid in chunk
+                ),
+                return_exceptions=True,
+            )
+            for cid, result in zip(chunk, results, strict=True):
+                if isinstance(result, DodpAuthFault):
+                    # Session died upstream -- drop and bail.
+                    await sessions.drop(username)
+                    return
+                if isinstance(result, BaseException):
+                    logger.info(
+                        "getContentResources(%s) for %s failed: %s",
+                        cid, username, result,
+                    )
+                    continue
+                sess.resources[cid] = result
 
     async def add_to_bookshelf(
         self, username: str, node_id: int,
@@ -512,15 +562,25 @@ class OpenapisDodpPlugin(Plugin):
         dodp_id = sess.ids.to_dodp(node_id)
         if dodp_id is None:
             return None
-        try:
-            resources = await self._client.get_content_resources(
-                sess.http, dodp_id,
-            )
-        except DodpAuthFault:
-            await sessions.drop(username)
-            return None
-        except DodpFault:
-            return None
+        # v0.8: hit the per-session cache first. List_bookshelf
+        # populates it via parallel probes; download() only
+        # falls back to a fresh SOAP call when the book wasn't
+        # in the most recent bookshelf (eg. an orphan int that
+        # the user persisted client-side).
+        cached_resources = sess.resources.get(dodp_id)
+        if cached_resources is not None:
+            resources = cached_resources
+        else:
+            try:
+                resources = await self._client.get_content_resources(
+                    sess.http, dodp_id,
+                )
+            except DodpAuthFault:
+                await sessions.drop(username)
+                return None
+            except DodpFault:
+                return None
+            sess.resources[dodp_id] = resources
         if not resources:
             return None
 
@@ -564,6 +624,54 @@ class OpenapisDodpPlugin(Plugin):
                 target.unlink(missing_ok=True)
             return None
         return target
+
+
+def _format_entries_for(
+    resources: "list[ContentResource] | None",
+) -> list[FormatEntry]:
+    """Build the BookRecord.formats list for a book given the
+    cached resource list. When the cache is absent (the resource
+    probe failed) we fall back to ANNOUNCED_FORMATS so the user
+    still sees something they can try -- download() will then
+    drop back to its own fallback path. When the cache IS
+    present, the formats list matches the upstream's actual
+    catalog (deduped, in ANNOUNCED_FORMATS order so the UI sort
+    is stable across books)."""
+    if resources is None:
+        return [
+            FormatEntry(id=fid, label=FORMAT_MAP[fid][1], narrator=None)
+            for fid in ANNOUNCED_FORMATS
+            if fid in FORMAT_MAP
+        ]
+    available_mimes = {r.mime_type.lower() for r in resources}
+    matching: list[FormatEntry] = []
+    for fid in ANNOUNCED_FORMATS:
+        entry = FORMAT_MAP.get(fid)
+        if entry is None:
+            continue
+        mime, label = entry
+        if mime.lower() in available_mimes:
+            matching.append(
+                FormatEntry(id=fid, label=label, narrator=None),
+            )
+    # If the catalog has audio-shaped resources that aren't in
+    # ANNOUNCED_FORMATS, still surface the default fmt so the
+    # client UI shows a playable option rather than an empty
+    # format list.
+    if not matching:
+        for r in resources:
+            if r.mime_type.lower().startswith("audio/"):
+                default_fid = ANNOUNCED_FORMATS[0] if ANNOUNCED_FORMATS else 12000
+                if default_fid in FORMAT_MAP:
+                    matching.append(
+                        FormatEntry(
+                            id=default_fid,
+                            label=FORMAT_MAP[default_fid][1],
+                            narrator=None,
+                        ),
+                    )
+                break
+    return matching
 
 
 def _select_resource_for_fmt(

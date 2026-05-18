@@ -5,6 +5,41 @@ Versioning: SemVer; pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-18
+
+### Added
+
+- **Lazy per-book format detection.** v0.3 announced the
+  static `ANNOUNCED_FORMATS` set (MP3 + DAISY ZIP) on every
+  book in `list_bookshelf`, which left clients clicking
+  format options that the upstream didn't actually have.
+  v0.8 fires a parallel `getContentResources` probe per
+  book at list-time, caches the result on the user's
+  `UserSession.resources` map, and filters each
+  `BookRecord.formats` list to formats the upstream
+  actually carries. A book with only MP3 now surfaces
+  exactly one FormatEntry; a book with both surfaces both.
+
+- **Resource cache shared with `download()`.** The
+  download hot path now reads through the same cache, so
+  the typical flow (list → click download) takes one
+  resource-URL GET instead of an extra
+  getContentResources round-trip. Books that weren't in
+  the most recent bookshelf (eg. an orphan int the user
+  persisted client-side) still probe on demand.
+
+- **Parallelism cap.** Resource probes fan out in chunks
+  of 8 (asyncio.gather with `return_exceptions=True`) so a
+  100-book bookshelf doesn't open 100 sockets at once.
+  Per-book probe failures fall back to the static
+  ANNOUNCED_FORMATS set for that book; the book stays in
+  the list rather than disappearing on a transient blip.
+
+### Tests
+
+3 new (per-book filtering, fallback on probe fault, cache
+reuse on download). 42 total.
+
 ## [0.7.0] - 2026-05-18
 
 ### Added
