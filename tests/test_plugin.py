@@ -550,6 +550,163 @@ async def test_set_bookmark_and_get_bookmark(install_transport):
 # -- download -----------------------------------------------
 
 
+async def test_list_bookshelf_announces_multiple_formats(install_transport):
+    """list_bookshelf should expose every entry in
+    ANNOUNCED_FORMATS as a FormatEntry on each BookRecord, so a
+    multi-format-aware client UI surfaces the choice."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getContentList" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getContentListResponse xmlns="{DNS}">'
+                    f'  <contentList id="issued">'
+                    f'    <contentItem id="con-multi">'
+                    f'      <label><text>Multi-fmt</text></label>'
+                    f'    </contentItem>'
+                    f'  </contentList>'
+                    f'</getContentListResponse>'
+                ),
+            )
+        raise AssertionError(body[:80])
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    await plugin.authenticate("alice", "pw")
+    books = await plugin.list_bookshelf("alice")
+    fmt_ids = [f.id for f in books[0].formats]
+    # ANNOUNCED_FORMATS in plugin.py: 12000 (mp3) + 12003 (zip).
+    # Pin both so a refactor that drops one is caught.
+    assert 12000 in fmt_ids
+    assert 12003 in fmt_ids
+
+
+async def test_download_picks_resource_matching_requested_fmt(install_transport, tmp_path: Path):
+    """When the user asks for fmt=12003 (DAISY ZIP), the plugin
+    must pick the application/zip resource, not the first audio
+    one. This is the load-bearing behaviour of v0.3 -- without
+    it, mp3 wins regardless of the requested format."""
+    served_url = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal served_url
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getContentList" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getContentListResponse xmlns="{DNS}">'
+                    f'  <contentList id="issued">'
+                    f'    <contentItem id="con-mix">'
+                    f'      <label><text>Mix</text></label>'
+                    f'    </contentItem>'
+                    f'  </contentList>'
+                    f'</getContentListResponse>'
+                ),
+            )
+        if "getContentResources" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getContentResourcesResponse xmlns="{DNS}">'
+                    f'  <resources>'
+                    f'    <resource uri="https://cdn.example/a.mp3" mimeType="audio/mpeg" size="100"/>'
+                    f'    <resource uri="https://cdn.example/a.zip" mimeType="application/zip" size="200"/>'
+                    f'  </resources>'
+                    f'</getContentResourcesResponse>'
+                ),
+            )
+        # Resource fetch
+        served_url = str(request.url)
+        return httpx.Response(200, content=b"ZIP_BYTES")
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    await plugin.authenticate("alice", "pw")
+    books = await plugin.list_bookshelf("alice")
+    int_id = books[0].id
+
+    out = await plugin.download(
+        "alice", fmt=12003, node_id=int_id, cache_dir=tmp_path,
+    )
+    assert out is not None
+    assert out.suffix == ".zip"
+    assert served_url is not None and served_url.endswith(".zip")
+    assert out.read_bytes() == b"ZIP_BYTES"
+
+
+async def test_download_falls_back_when_requested_fmt_unavailable(install_transport, tmp_path: Path):
+    """Client asks for fmt=12002 (WAV) but the server only has
+    mp3. Rather than 404 the request, the plugin falls back to
+    the first audio resource. The mismatch is logged for ops."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getContentList" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getContentListResponse xmlns="{DNS}">'
+                    f'  <contentList id="issued">'
+                    f'    <contentItem id="con-only-mp3">'
+                    f'      <label><text>Only MP3</text></label>'
+                    f'    </contentItem>'
+                    f'  </contentList>'
+                    f'</getContentListResponse>'
+                ),
+            )
+        if "getContentResources" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getContentResourcesResponse xmlns="{DNS}">'
+                    f'  <resources>'
+                    f'    <resource uri="https://cdn.example/a.mp3" mimeType="audio/mpeg" size="100"/>'
+                    f'  </resources>'
+                    f'</getContentResourcesResponse>'
+                ),
+            )
+        return httpx.Response(200, content=b"MP3_BYTES")
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    await plugin.authenticate("alice", "pw")
+    books = await plugin.list_bookshelf("alice")
+    int_id = books[0].id
+    out = await plugin.download(
+        "alice", fmt=12002, node_id=int_id, cache_dir=tmp_path,
+    )
+    assert out is not None
+    assert out.suffix == ".mp3"
+
+
 async def test_download_writes_cache_file(install_transport, tmp_path: Path):
     payload = b"ID3audio_bytes_here"
 

@@ -36,20 +36,38 @@ from hummingbird.models import BookRecord, FormatEntry, SearchResult
 from hummingbird.plugins import Plugin
 
 from . import config, sessions
-from .client import DodpAuthFault, DodpClient, DodpFault
+from .client import ContentResource, DodpAuthFault, DodpClient, DodpFault
 
 
 logger = logging.getLogger("openapis_ca_dodp.plugin")
 
 
-# Stand-in format-id Hummingbird shows in the bookshelf when the
-# DODP server doesn't expose a per-format breakdown. NNELS uses
-# 11000/11001/11500 for MP3 variants -- we pick something that
-# doesn't collide so a mixed multi-plugin deployment would still
-# be distinguishable in client UIs. (Plugins don't actually run
-# side-by-side, but the convention is cheap to keep.)
-DEFAULT_FORMAT_ID = 12000
-DEFAULT_FORMAT_LABEL = "DAISY Online"
+# DODP doesn't expose per-format BookRecord-friendly catalog at
+# list_bookshelf time (the resources of a book are only knowable
+# via a per-book getContentResources call, which would balloon
+# list_bookshelf latency by N round-trips). We work around that
+# by announcing a static set of format-ids per book and resolving
+# the actual mime type at download time. The 12xxx range avoids
+# collisions with NNELS' 11xxx range so a mixed deployment would
+# still be distinguishable in client UIs.
+#
+# Each entry: format_id -> (mime_type, label). Operators can
+# extend the announced set by overriding FORMAT_MAP at runtime
+# (the BookRecord.formats list is built from ANNOUNCED_FORMATS,
+# filtered to keys present in FORMAT_MAP).
+FORMAT_MAP: dict[int, tuple[str, str]] = {
+    12000: ("audio/mpeg", "MP3 audio"),
+    12001: ("audio/mp4", "M4A audio"),
+    12002: ("audio/wav", "WAV audio"),
+    12003: ("application/zip", "DAISY ZIP"),
+    12004: ("audio/ogg", "OGG audio"),
+}
+
+# What we announce per book by default. MP3 covers the vast
+# majority of DAISY Online catalogs; ZIP covers structured
+# DAISY books that ship as an archive. Operators wanting WAV
+# or M4A entries can extend at deployment time.
+ANNOUNCED_FORMATS: list[int] = [12000, 12003]
 
 
 # Reading-system identification baked in here rather than via
@@ -246,19 +264,18 @@ class OpenapisDodpPlugin(Plugin):
             )
             return []
         out: list[BookRecord] = []
+        format_entries = [
+            FormatEntry(id=fid, label=FORMAT_MAP[fid][1], narrator=None)
+            for fid in ANNOUNCED_FORMATS
+            if fid in FORMAT_MAP
+        ]
         for item in items:
             node_id = sess.ids.to_int(item.content_id)
             out.append(
                 BookRecord(
                     id=node_id,
                     title=item.label or item.content_id,
-                    formats=[
-                        FormatEntry(
-                            id=DEFAULT_FORMAT_ID,
-                            label=DEFAULT_FORMAT_LABEL,
-                            narrator=None,
-                        ),
-                    ],
+                    formats=list(format_entries),
                 ),
             )
         return out
@@ -392,17 +409,20 @@ class OpenapisDodpPlugin(Plugin):
         if not resources:
             return None
 
-        # Pick the first audio resource. DODP doesn't tag a
-        # "primary" resource so we settle for the first
-        # audio-shaped MIME -- callers wanting per-format
-        # selection should query DODP directly. The cache dir
-        # plus a stable filename derived from the contentID
-        # avoids name collisions when the same user fetches
-        # multiple books.
-        audio = next(
-            (r for r in resources if r.mime_type.startswith("audio/")),
-            resources[0],
-        )
+        # Pick the resource matching the requested fmt-id. Fall
+        # back to "first audio-shaped MIME" only if the fmt is
+        # unknown or no resource matches the requested mime --
+        # this gives operators a way to extend FORMAT_MAP and
+        # still have legacy clients (asking for the default fmt)
+        # get something playable.
+        audio = _select_resource_for_fmt(resources, fmt)
+        if audio is None:
+            logger.warning(
+                "no resource matched fmt=%s for %s/%s; available: %s",
+                fmt, username, dodp_id,
+                [r.mime_type for r in resources],
+            )
+            return None
         cache_dir.mkdir(parents=True, exist_ok=True)
         suffix = _suffix_for_mime(audio.mime_type) or ".bin"
         safe_id = dodp_id.replace("/", "_").replace("\\", "_")
@@ -429,6 +449,40 @@ class OpenapisDodpPlugin(Plugin):
                 target.unlink(missing_ok=True)
             return None
         return target
+
+
+def _select_resource_for_fmt(
+    resources: "list[ContentResource]", fmt: int,
+) -> "ContentResource | None":
+    """Pick the resource that matches the requested format-id.
+
+    Lookup order:
+
+      1. Exact mime match for the requested fmt (case-
+         insensitive). This is the right answer for clients
+         that called list_bookshelf, saw FormatEntry(id=12000),
+         and asked for fmt=12000.
+
+      2. If the fmt isn't in our table, or no resource matches
+         its mime, fall back to the first audio-shaped
+         resource. Better to serve SOMETHING playable than to
+         404 a client that asked for a fmt the upstream
+         doesn't carry.
+
+      3. If there are no audio resources at all, return None
+         and let the caller report the failure.
+    """
+    target_mime = FORMAT_MAP.get(fmt, (None, None))[0]
+    if target_mime is not None:
+        target_lower = target_mime.lower()
+        for r in resources:
+            if r.mime_type.lower() == target_lower:
+                return r
+    # Fallback: first audio resource regardless of fmt.
+    for r in resources:
+        if r.mime_type.lower().startswith("audio/"):
+            return r
+    return None
 
 
 def _suffix_for_mime(mime_type: str) -> str | None:
