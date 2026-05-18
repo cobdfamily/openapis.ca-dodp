@@ -35,9 +35,8 @@ import httpx
 from hummingbird.models import BookRecord, FormatEntry, SearchResult
 from hummingbird.plugins import Plugin
 
-from . import sessions
+from . import config, sessions
 from .client import DodpAuthFault, DodpClient, DodpFault
-from .config import settings
 
 
 logger = logging.getLogger("openapis_ca_dodp.plugin")
@@ -61,16 +60,31 @@ class OpenapisDodpPlugin(Plugin):
     name = "openapis_dodp"
 
     def __init__(self, client: DodpClient | None = None) -> None:
-        # Allow injection for tests; default to a singleton wired
-        # to the env-config so plugin entry-point loaders that
-        # call ``OpenapisDodpPlugin()`` with no args get a usable
-        # instance.
-        self._client = client or DodpClient(
-            base_url=settings.base_url,
-            namespace=settings.namespace,
-            user_agent=settings.user_agent,
-            timeout_seconds=settings.request_timeout_seconds,
-        )
+        # Allow injection for tests; otherwise build a client
+        # from env config. Missing base_url is a misconfig but
+        # not a fatal one -- hummingbird's loader catches an
+        # __init__ exception and silently falls back to
+        # standalone, which is confusing to operators. Instead
+        # we log a clear warning and leave self._client as None;
+        # every hook then returns its "no session" fallback so
+        # the service still serves a coherent (empty) bookshelf.
+        if client is not None:
+            self._client = client
+        elif config.settings.base_url:
+            s = config.settings
+            self._client = DodpClient(
+                base_url=s.base_url,
+                namespace=s.namespace,
+                user_agent=s.user_agent,
+                timeout_seconds=s.request_timeout_seconds,
+            )
+        else:
+            logger.warning(
+                "OPENAPIS_DODP_BASE_URL is not set -- plugin is "
+                "loaded but every hook will be a no-op until "
+                "the URL is configured and hummingbird restarts.",
+            )
+            self._client = None
 
     # -- auth ---------------------------------------------------
 
@@ -79,6 +93,8 @@ class OpenapisDodpPlugin(Plugin):
         against a fresh httpx client so the new credentials get a
         clean cookie jar, then stash the client for subsequent
         hooks to reuse."""
+        if self._client is None:
+            return False
         await sessions.drop(username)
         http = httpx.AsyncClient(
             timeout=self._client.timeout_seconds,
@@ -117,7 +133,7 @@ class OpenapisDodpPlugin(Plugin):
             return []
         try:
             items = await self._client.get_content_list(
-                sess.http, settings.bookshelf_list_id,
+                sess.http, config.settings.bookshelf_list_id,
             )
         except DodpAuthFault:
             await sessions.drop(username)
