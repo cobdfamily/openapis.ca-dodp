@@ -5,6 +5,31 @@ Versioning: SemVer; pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-18
+
+### Added
+
+- **`.github/workflows/release.yml`** -- builds and pushes
+  the multi-arch (amd64 + arm64) container image to kibble
+  on every `git tag v*`. Tagged twice: with the version
+  and as `latest`. Matches the nnels release shape.
+- **`logoff(username)` plugin method** -- issues DODP
+  `logOff` against the user's cached session, then drops
+  the local state. Best-effort: server-side faults (eg.
+  "session already gone") are logged and swallowed so a
+  stale local state can't trap a user out of re-auth.
+- **Clean session handoff on re-authentication.** When a
+  user re-authenticates (token rotation, password reset),
+  the plugin now issues `logOff` against the upstream
+  before forgetting the local session. Previously the
+  old DODP session lingered on the server for the
+  upstream's session-timeout (hours on KADOS).
+
+### Tests
+
+2 new (logOff on auth replacement, fault-tolerant
+local-drop). 36 total.
+
 ## [0.5.0] - 2026-05-18
 
 ### Added

@@ -243,6 +243,80 @@ async def test_authenticate_fails_when_setReadingSystemAttributes_faults(install
     assert sess_mod.get("alice") is None
 
 
+async def test_authenticate_logs_off_old_session_before_replacing(install_transport):
+    """v0.6: when the same user re-authenticates (eg. token
+    rotation), the old DODP session must be released upstream
+    via logOff so it doesn't linger holding a server-side slot.
+    Pin that authenticate fires logOff exactly once when a
+    prior session exists."""
+    logoffs = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal logoffs
+        body = request.content.decode()
+        if "logOff" in body:
+            logoffs += 1
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOffResponse xmlns="{DNS}">'
+                    f'<logOffResult>true</logOffResult>'
+                    f'</logOffResponse>'
+                ),
+            )
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        raise AssertionError(body[:80])
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    # First auth: no prior session -> no logOff fires.
+    await plugin.authenticate("alice", "pw1")
+    assert logoffs == 0
+    # Second auth: prior session exists -> one logOff fires
+    # before the new logOn.
+    await plugin.authenticate("alice", "pw2")
+    assert logoffs == 1
+
+
+async def test_logoff_tolerates_server_fault(install_transport):
+    """If logOff itself faults (eg. server says "session
+    already gone"), the plugin must still drop the local
+    state so the user can re-auth cleanly. Otherwise an
+    operator who restarts the upstream is stuck with stale
+    local sessions."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "logOff" in body:
+            return httpx.Response(200, text=soap_fault("not logged in"))
+        raise AssertionError(body[:80])
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    from openapis_ca_dodp import sessions as sess_mod
+    await plugin.authenticate("alice", "pw")
+    assert sess_mod.get("alice") is not None
+    # logoff faults but should still nuke the local state.
+    await plugin.logoff("alice")
+    assert sess_mod.get("alice") is None
+
+
 async def test_authenticate_replaces_existing_session(install_transport):
     """A second logOn for the same user must drop the previous
     session (and close its underlying httpx client) before

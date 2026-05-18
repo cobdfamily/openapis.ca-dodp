@@ -161,6 +161,37 @@ class OpenapisDodpPlugin(Plugin):
 
     # -- auth ---------------------------------------------------
 
+    async def logoff(self, username: str) -> None:
+        """Issue DODP logOff for ``username``'s cached session, then
+        drop the local session state. Best-effort: a fault from the
+        server (eg. session already gone) is logged and swallowed
+        -- the local drop still happens.
+
+        Hummingbird doesn't yet have a logout plugin hook, but this
+        method is called from ``authenticate`` when replacing an
+        existing session (so the old DODP session is released
+        cleanly upstream) and is exposed for future use.
+        """
+        if self._client is None:
+            await sessions.drop(username)
+            return
+        sess = sessions.get(username)
+        if sess is None:
+            return
+        try:
+            await self._client.log_off(sess.http)
+        except DodpFault as exc:
+            logger.info(
+                "logOff for %s faulted (continuing): %s",
+                username, exc.faultstring,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info(
+                "logOff for %s raised %s (continuing)",
+                username, type(exc).__name__,
+            )
+        await sessions.drop(username)
+
     async def authenticate(self, username: str, password: str) -> bool:
         """Open (or reset) a session for ``username``: issue logOn
         against a fresh httpx client so the new credentials get a
@@ -178,7 +209,11 @@ class OpenapisDodpPlugin(Plugin):
         """
         if self._client is None:
             return False
-        await sessions.drop(username)
+        # Clean handoff: if an old session exists, issue a real
+        # logOff against the server before forgetting it locally.
+        # Otherwise the upstream session lingers (PHPSESSID
+        # timeouts on KADOS run hours) wasting a slot.
+        await self.logoff(username)
         http = httpx.AsyncClient(
             timeout=self._client.timeout_seconds,
             follow_redirects=True,

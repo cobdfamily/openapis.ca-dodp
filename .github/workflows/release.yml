@@ -1,0 +1,82 @@
+name: release
+
+# Builds and pushes the container image to the kibble registry
+# on every git tag matching v*. Tagged twice: with the version
+# (v0.6.0 -> 0.6.0) and as `latest`. Deploy hosts pull from
+# kibble.apps.blindhub.ca/cobdfamily/openapis.ca-dodp:<version>.
+#
+# The kibble registry is anonymous-push for the cobdfamily/*
+# path and speaks plain HTTP, so buildkit is configured to talk
+# plain HTTP to it. The same config also applies to the FROM
+# line in the Dockerfile (which pulls cobdfamily/hummingbird
+# from the same registry), so no docker daemon reconfiguration
+# is needed.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to rebuild (eg. v0.6.0)"
+        required: true
+
+env:
+  REGISTRY: kibble.apps.blindhub.ca
+  IMAGE: cobdfamily/openapis.ca-dodp
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: derive version (strip leading v)
+        id: ver
+        run: |
+          ref="${{ inputs.tag || github.ref_name }}"
+          echo "version=${ref#v}" >> "$GITHUB_OUTPUT"
+
+      - name: set up qemu (for arm64 cross-emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: set up buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."kibble.apps.blindhub.ca"]
+              http = true
+              insecure = true
+
+      - name: build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # Multi-arch: matches the hummingbird base image
+          # so apple-silicon dev boxes can pull the native
+          # arm64 variant without docker compose ``platform``
+          # pins.
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.ver.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: summary
+        run: |
+          {
+            echo "### Pushed"
+            echo ""
+            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.ver.outputs.version }}\`"
+            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE }}:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
