@@ -52,6 +52,61 @@ DEFAULT_FORMAT_ID = 12000
 DEFAULT_FORMAT_LABEL = "DAISY Online"
 
 
+# Reading-system identification baked in here rather than via
+# config because every hummingbird-with-this-plugin deployment
+# IS a "hummingbird" reading system from the DODP server's
+# point of view. Version is read lazily so a hummingbird
+# upgrade doesn't require touching this plugin.
+READING_SYSTEM_MANUFACTURER = "cobdfamily"
+READING_SYSTEM_MODEL = "hummingbird"
+
+
+def _hummingbird_version() -> str:
+    try:
+        from hummingbird import __version__ as v  # noqa: PLC0415
+
+        return v
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+READING_SYSTEM_VERSION = _hummingbird_version()
+
+
+def _summarise_service_attrs(caps: dict) -> dict:
+    """Pull the useful operator-visible fields out of the
+    getServiceAttributes response. The element-to-dict shape
+    varies wildly between DODP impls (some wrap fields in
+    ``<serviceAttributes>``, some emit them flat; ``service``
+    may be a string or a nested element); defensively normalise
+    everything to ``None`` when the expected shape isn't there.
+
+    We log this at INFO so a ``docker logs`` tail is readable;
+    the full payload would drown out everything else.
+    """
+    inner = caps.get("serviceAttributes")
+    if not isinstance(inner, dict):
+        inner = caps if isinstance(caps, dict) else {}
+    service = inner.get("service")
+    if isinstance(service, dict):
+        # Common shape: <service><label><text>X</text></label></service>
+        label = service.get("label")
+        if isinstance(label, dict):
+            service_label = label.get("text") or label.get("@id")
+        else:
+            service_label = label
+    else:
+        service_label = service
+    return {
+        "service": service_label,
+        "supportsSearch": inner.get("supportsSearch"),
+        "supportsServerSideBack": inner.get("supportsServerSideBack"),
+        "supportedOptionalOperations": inner.get(
+            "supportedOptionalOperations",
+        ),
+    }
+
+
 class OpenapisDodpPlugin(Plugin):
     """Speaks DODP to the configured base URL on behalf of the
     Hummingbird user. Each Hummingbird user gets one DODP session
@@ -91,8 +146,18 @@ class OpenapisDodpPlugin(Plugin):
     async def authenticate(self, username: str, password: str) -> bool:
         """Open (or reset) a session for ``username``: issue logOn
         against a fresh httpx client so the new credentials get a
-        clean cookie jar, then stash the client for subsequent
-        hooks to reuse."""
+        clean cookie jar, run the DODP service handshake
+        (getServiceAttributes + setReadingSystemAttributes), then
+        stash the client for subsequent hooks to reuse.
+
+        getServiceAttributes failure is logged but not fatal --
+        we log capability info for ops visibility and continue.
+        setReadingSystemAttributes failure IS fatal because
+        stricter DODP servers (KADOS at minimum) fault the next
+        getContentList without it; we drop the session and
+        return False so the user sees an auth failure rather
+        than a silent "no books" empty bookshelf later.
+        """
         if self._client is None:
             return False
         await sessions.drop(username)
@@ -114,6 +179,42 @@ class OpenapisDodpPlugin(Plugin):
             # don't second-guess).
             await http.aclose()
             return False
+
+        # Handshake: capabilities first (logged for ops), then
+        # reading-system identification.
+        try:
+            caps = await self._client.get_service_attributes(http)
+            logger.info(
+                "DODP service attributes for %s: %r",
+                username, _summarise_service_attrs(caps),
+            )
+        except DodpFault as exc:
+            # Servers that don't implement getServiceAttributes
+            # will fault here; keep going since the spec lets
+            # this be optional.
+            logger.info(
+                "getServiceAttributes failed for %s (continuing): %s",
+                username, exc.faultstring,
+            )
+
+        try:
+            await self._client.set_reading_system_attributes(
+                http,
+                manufacturer=READING_SYSTEM_MANUFACTURER,
+                model=READING_SYSTEM_MODEL,
+                version=READING_SYSTEM_VERSION,
+            )
+        except DodpFault as exc:
+            # Hard failure: KADOS-style servers will then fault
+            # every subsequent op. Drop the session so the user
+            # sees the auth failure cleanly.
+            logger.warning(
+                "setReadingSystemAttributes failed for %s: %s",
+                username, exc.faultstring,
+            )
+            await http.aclose()
+            return False
+
         sessions.put(username, sessions.UserSession(http=http))
         return True
 

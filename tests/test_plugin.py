@@ -20,19 +20,31 @@ from openapis_ca_dodp import sessions
 from openapis_ca_dodp.client import DEFAULT_DODP_NS, DodpClient
 from openapis_ca_dodp.plugin import OpenapisDodpPlugin
 
-from tests.conftest import soap_envelope, soap_fault
+from tests.conftest import (
+    authenticated_handshake,
+    soap_envelope,
+    soap_fault,
+)
 
 
 DNS = DEFAULT_DODP_NS
 CLIENT_URL = "https://dodp.example.org/service"
 
 
-def _plugin(handler) -> tuple[OpenapisDodpPlugin, httpx.MockTransport]:
+def _plugin(handler, *, wrap_handshake: bool = True) -> tuple[OpenapisDodpPlugin, httpx.MockTransport]:
     """Build a plugin whose client points at the mocked DODP URL.
     The plugin internally builds its own httpx.AsyncClient on
     authenticate(); we intercept by passing the same transport
     via a monkey-patched factory.
+
+    By default the handler is wrapped with
+    ``authenticated_handshake`` so getServiceAttributes +
+    setReadingSystemAttributes succeed transparently. Tests that
+    want to exercise the handshake itself can opt out with
+    ``wrap_handshake=False``.
     """
+    if wrap_handshake:
+        handler = authenticated_handshake(handler)
     transport = httpx.MockTransport(handler)
     client = DodpClient(base_url=CLIENT_URL, namespace=DNS)
     plugin = OpenapisDodpPlugin(client=client)
@@ -92,6 +104,143 @@ async def test_authenticate_bad_credentials_returns_false(install_transport):
     # No session left behind on auth failure -- the next request
     # for this user starts fresh.
     assert sessions.get("alice") is None
+
+
+async def test_authenticate_runs_dodp_handshake(install_transport):
+    """logOn must be followed by getServiceAttributes +
+    setReadingSystemAttributes. The latter is required by spec-
+    strict servers (KADOS); without it, subsequent getContentList
+    calls fault. Pin the call order so a refactor can't silently
+    drop the handshake."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            seen.append("logOn")
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getServiceAttributes" in body:
+            seen.append("getServiceAttributes")
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getServiceAttributesResponse xmlns="{DNS}">'
+                    f'  <serviceAttributes>'
+                    f'    <supportsSearch>false</supportsSearch>'
+                    f'  </serviceAttributes>'
+                    f'</getServiceAttributesResponse>'
+                ),
+            )
+        if "setReadingSystemAttributes" in body:
+            seen.append("setReadingSystemAttributes")
+            # Also pin the manufacturer + model show up; KADOS
+            # uses these to populate its operator UI.
+            assert "cobdfamily" in body
+            assert "hummingbird" in body
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<setReadingSystemAttributesResponse xmlns="{DNS}">'
+                    f'<setReadingSystemAttributesResult>true</setReadingSystemAttributesResult>'
+                    f'</setReadingSystemAttributesResponse>'
+                ),
+            )
+        raise AssertionError(body[:120])
+
+    plugin, transport = _plugin(handler, wrap_handshake=False)
+    install_transport(transport)
+    ok = await plugin.authenticate("alice", "pw")
+    assert ok is True
+    assert seen == [
+        "logOn", "getServiceAttributes", "setReadingSystemAttributes",
+    ]
+
+
+async def test_authenticate_tolerates_getServiceAttributes_fault(install_transport):
+    """getServiceAttributes is best-effort per spec. A server
+    that doesn't implement it (returns a fault) should not block
+    authentication -- we move on to setReadingSystemAttributes."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            seen.append("logOn")
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getServiceAttributes" in body:
+            seen.append("getServiceAttributes (faulted)")
+            return httpx.Response(200, text=soap_fault("operation not supported"))
+        if "setReadingSystemAttributes" in body:
+            seen.append("setReadingSystemAttributes")
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<setReadingSystemAttributesResponse xmlns="{DNS}">'
+                    f'<setReadingSystemAttributesResult>true</setReadingSystemAttributesResult>'
+                    f'</setReadingSystemAttributesResponse>'
+                ),
+            )
+        raise AssertionError(body[:120])
+
+    plugin, transport = _plugin(handler, wrap_handshake=False)
+    install_transport(transport)
+    ok = await plugin.authenticate("alice", "pw")
+    assert ok is True
+    assert seen[0] == "logOn"
+    assert "(faulted)" in seen[1]
+    assert seen[2] == "setReadingSystemAttributes"
+
+
+async def test_authenticate_fails_when_setReadingSystemAttributes_faults(install_transport):
+    """The reading-system handshake IS load-bearing: if it
+    faults, the user's later getContentList will fault, so we
+    fail the auth up front to give a clean signal."""
+    from openapis_ca_dodp import sessions as sess_mod
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getServiceAttributes" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getServiceAttributesResponse xmlns="{DNS}">'
+                    f'  <serviceAttributes/>'
+                    f'</getServiceAttributesResponse>'
+                ),
+            )
+        if "setReadingSystemAttributes" in body:
+            return httpx.Response(200, text=soap_fault("reading-system rejected"))
+        raise AssertionError(body[:120])
+
+    plugin, transport = _plugin(handler, wrap_handshake=False)
+    install_transport(transport)
+    ok = await plugin.authenticate("alice", "pw")
+    assert ok is False
+    # Session must not be left behind once the handshake fails.
+    assert sess_mod.get("alice") is None
 
 
 async def test_authenticate_replaces_existing_session(install_transport):

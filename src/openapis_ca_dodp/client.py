@@ -137,6 +137,80 @@ class DodpClient:
         root = await self._call(http, "logOff", {})
         return self._result_bool(root, "logOff")
 
+    async def get_service_attributes(
+        self, http: httpx.AsyncClient,
+    ) -> dict[str, Any]:
+        """Capability negotiation. Spec says this MUST be called
+        after logOn before other operations; in practice most
+        servers tolerate skipping it, but stricter impls will
+        fault on the next call. We send it as part of the post-
+        logOn handshake and surface the response so callers can
+        log the upstream's capability set."""
+        root = await self._call(http, "getServiceAttributes", {})
+        return self._element_to_dict(root)
+
+    async def set_reading_system_attributes(
+        self,
+        http: httpx.AsyncClient,
+        *,
+        manufacturer: str,
+        model: str,
+        version: str,
+        serial_number: str | None = None,
+        supported_content_formats: list[str] | None = None,
+        supported_mime_types: list[str] | None = None,
+        supported_input_types: list[str] | None = None,
+        requires_audio_labels: bool = False,
+        preferred_ui_language: str = "en",
+    ) -> bool:
+        """Identify the reading system to the server. Many DAISY
+        servers (KADOS included) require this immediately after
+        logOn -- without it, getContentList faults with "client
+        not initialised". We default to sensible values that
+        describe a generic hummingbird-fronted reading system
+        and let callers override.
+
+        The ``config`` sub-element wraps the per-capability
+        switches. Lists become repeated children of their parent
+        element (eg. several ``<mimeType>`` children inside
+        ``<supportedMimeTypes>``).
+        """
+        # Per the DODP schema, supportedMimeTypes wraps
+        # <mimeType>X</mimeType> children, not <supportedMimeTypes>
+        # children. The _append_param helper renders a list as
+        # repeated parent elements which is the wrong shape, so
+        # we build the bookkeeping dict here with the correct
+        # singular child tags.
+        config: dict[str, Any] = {
+            "supportedContentFormats": {
+                "contentFormat": supported_content_formats
+                or ["ANSI/NISO Z39.86-2005", "DAISY 2.02"]
+            },
+            "supportedMimeTypes": {
+                "mimeType": supported_mime_types
+                or ["audio/mpeg", "audio/mp4", "application/zip"]
+            },
+            "supportedInputTypes": {
+                "input": supported_input_types
+                or ["TEXT_NUMERIC", "TEXT_ALPHANUMERIC"]
+            },
+            "requiresAudioLabels": "true" if requires_audio_labels else "false",
+            "preferredUILanguage": preferred_ui_language,
+        }
+        attrs: dict[str, Any] = {
+            "manufacturer": manufacturer,
+            "model": model,
+            "serialNumber": serial_number or "",
+            "version": version,
+            "config": config,
+        }
+        root = await self._call(
+            http,
+            "setReadingSystemAttributes",
+            {"readingSystemAttributes": attrs},
+        )
+        return self._result_bool(root, "setReadingSystemAttributes")
+
     async def get_content_list(
         self, http: httpx.AsyncClient, list_id: str,
     ) -> list[ContentItem]:

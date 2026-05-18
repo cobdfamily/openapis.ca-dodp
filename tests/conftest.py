@@ -65,3 +65,46 @@ def _clean_sessions():
     sessions._clear_for_tests()
     yield
     sessions._clear_for_tests()
+
+
+def _dodp_ns() -> str:
+    from openapis_ca_dodp.client import DEFAULT_DODP_NS
+    return DEFAULT_DODP_NS
+
+
+def authenticated_handshake(handler: SoapHandler) -> SoapHandler:
+    """Wrap a SOAP handler so it transparently answers the post-
+    logOn handshake calls (getServiceAttributes +
+    setReadingSystemAttributes). Lets per-test handlers focus on
+    the operation under test instead of re-implementing the
+    handshake boilerplate.
+    """
+
+    ns = _dodp_ns()
+
+    def wrapper(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "getServiceAttributes" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getServiceAttributesResponse xmlns="{ns}">'
+                    f'  <serviceAttributes>'
+                    f'    <service id="test-svc"><label><text>Test</text></label></service>'
+                    f'    <supportsSearch>false</supportsSearch>'
+                    f'  </serviceAttributes>'
+                    f'</getServiceAttributesResponse>'
+                ),
+            )
+        if "setReadingSystemAttributes" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<setReadingSystemAttributesResponse xmlns="{ns}">'
+                    f'<setReadingSystemAttributesResult>true</setReadingSystemAttributesResult>'
+                    f'</setReadingSystemAttributesResponse>'
+                ),
+            )
+        return handler(request)
+
+    return wrapper

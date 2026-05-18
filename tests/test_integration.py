@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from openapis_ca_dodp import sessions
 from openapis_ca_dodp.client import DEFAULT_DODP_NS, DodpClient
 
-from tests.conftest import soap_envelope
+from tests.conftest import authenticated_handshake, soap_envelope
 
 
 DNS = DEFAULT_DODP_NS
@@ -102,8 +102,10 @@ def test_bookshelf_flows_through_plugin(hb_app, monkeypatch):
         raise AssertionError(f"unexpected SOAP body: {body[:80]}")
 
     # Patch every httpx.AsyncClient the plugin spins up to use
-    # our MockTransport. Same trick as the unit tests.
-    transport = httpx.MockTransport(dodp_handler)
+    # our MockTransport. Same trick as the unit tests. The
+    # handshake wrapper transparently answers the post-logOn
+    # service-attributes + reading-system-attributes calls.
+    transport = httpx.MockTransport(authenticated_handshake(dodp_handler))
     original_init = httpx.AsyncClient.__init__
 
     def patched_init(self, *args, **kwargs):
