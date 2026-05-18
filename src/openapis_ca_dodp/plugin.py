@@ -32,6 +32,7 @@ import logging
 from pathlib import Path
 
 import httpx
+from lxml import etree
 
 from hummingbird.models import BookRecord, FormatEntry, SearchResult
 from hummingbird.plugins import Plugin
@@ -499,14 +500,106 @@ class OpenapisDodpPlugin(Plugin):
         formats: list[int] | None,
         page: int,
     ) -> SearchResult:
-        # DODP v1 doesn't define search; v2 uses a structured
-        # "questions" interaction that doesn't map onto
-        # Hummingbird's flat list of BookRecords. Return an empty
-        # result rather than raising NotImplementedError so the
-        # REST endpoint just returns no matches instead of 500ing.
-        return SearchResult(
+        """v0.9: best-effort DODP v2 search via getQuestions.
+
+        DODP v1 has no search; v2 uses a recursive question /
+        userResponse flow that's overkill for Hummingbird's
+        flat (query, page) contract. We commit to handling at
+        most one round-trip:
+
+          1. getQuestions([]) -> discover the entry shape.
+             If the server returns a contentList directly,
+             use it.
+          2. If it returned a single text question, send the
+             user's query as a userResponse and getQuestions
+             again. If THAT response is a contentList, use
+             it. If it's another question, give up (multi-
+             step search isn't representable in the flat
+             contract).
+
+        Servers that don't implement getQuestions (most v1
+        impls) fault on step 1; we catch and return an empty
+        result. The caller sees "no matches" instead of an
+        error, matching the existing v0.x behaviour for the
+        unimplemented case.
+        """
+        empty = SearchResult(
             query=query, page=page, books=[],
             total_pages=0, total_results=0,
+        )
+        sess = sessions.get(username)
+        if sess is None or self._client is None:
+            return empty
+        try:
+            step1 = await self._client.get_questions(sess.http, [])
+        except DodpAuthFault:
+            await sessions.drop(username)
+            return empty
+        except DodpFault as exc:
+            logger.info(
+                "search: getQuestions(empty) failed for %s: %s",
+                username, exc.faultstring,
+            )
+            return empty
+
+        items = _content_list_items(self._client.namespace, step1)
+        if items is None:
+            question_id = _first_input_question_id(
+                self._client.namespace, step1,
+            )
+            if question_id is None:
+                # No content list AND no input question we can
+                # answer. Could be a multipleChoiceQuestion or
+                # an unrecognised shape -- give up on search
+                # rather than guess.
+                return empty
+            try:
+                step2 = await self._client.get_questions(
+                    sess.http,
+                    [{"questionID": question_id, "value": query}],
+                )
+            except DodpAuthFault:
+                await sessions.drop(username)
+                return empty
+            except DodpFault as exc:
+                logger.info(
+                    "search: getQuestions(response) failed for "
+                    "%s: %s",
+                    username, exc.faultstring,
+                )
+                return empty
+            items = _content_list_items(self._client.namespace, step2)
+            if items is None:
+                # Multi-step flow we don't traverse.
+                return empty
+
+        # Map results to BookRecords + announce-only formats.
+        # We could probe per-book resources like list_bookshelf
+        # does but search results are usually a different set
+        # than the bookshelf, and probing them all is wasteful
+        # for the common "user scrolls past most results" case.
+        # Use the static ANNOUNCED_FORMATS list here.
+        format_entries = [
+            FormatEntry(id=fid, label=FORMAT_MAP[fid][1], narrator=None)
+            for fid in ANNOUNCED_FORMATS
+            if fid in FORMAT_MAP
+        ]
+        records: list[BookRecord] = []
+        for content_id, label in items:
+            node_id = sess.ids.to_int(content_id)
+            records.append(
+                BookRecord(
+                    id=node_id,
+                    title=label or content_id,
+                    formats=list(format_entries),
+                ),
+            )
+        return SearchResult(
+            query=query,
+            page=page,
+            books=records,
+            total_pages=1,
+            total_results=len(records),
         )
 
     # -- bookmarks ---------------------------------------------
@@ -624,6 +717,61 @@ class OpenapisDodpPlugin(Plugin):
                 target.unlink(missing_ok=True)
             return None
         return target
+
+
+def _content_list_items(
+    namespace: str, root: etree._Element,
+) -> list[tuple[str, str]] | None:
+    """Pull (content_id, label) pairs out of a DODP response
+    that either contains a ``contentList`` (direct results) or
+    a ``questions`` block (more input needed). Returns None
+    when no contentList is present so the caller can branch on
+    the question path instead."""
+    found = root.find(f"{{{namespace}}}contentList")
+    if found is None:
+        # Some servers nest the contentList one level deeper.
+        for desc in root.iter(f"{{{namespace}}}contentList"):
+            found = desc
+            break
+    if found is None:
+        return None
+    items: list[tuple[str, str]] = []
+    for item_el in found.iter(f"{{{namespace}}}contentItem"):
+        cid = item_el.get("id") or ""
+        label_el = item_el.find(f"{{{namespace}}}label")
+        label = ""
+        if label_el is not None:
+            text_el = label_el.find(f"{{{namespace}}}text")
+            label = (
+                (text_el.text or "")
+                if text_el is not None
+                else (label_el.text or "")
+            )
+        if cid:
+            items.append((cid, label.strip()))
+    return items
+
+
+def _first_input_question_id(
+    namespace: str, root: etree._Element,
+) -> str | None:
+    """Pull the id of the first text-input question in a DODP
+    getQuestions response. We support TEXT_NUMERIC + TEXT_
+    ALPHANUMERIC; multiple-choice and other input types fall
+    through to None (the search path then gives up).
+
+    Different impls put the question element at different
+    depths so we search the whole subtree."""
+    for input_q in root.iter(f"{{{namespace}}}inputQuestion"):
+        qid = input_q.get("id")
+        if qid:
+            return qid
+    # Older v1 servers sometimes use a flat <question> element.
+    for q in root.iter(f"{{{namespace}}}question"):
+        qid = q.get("id")
+        if qid:
+            return qid
+    return None
 
 
 def _format_entries_for(

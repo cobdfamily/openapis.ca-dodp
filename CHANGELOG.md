@@ -5,6 +5,45 @@ Versioning: SemVer; pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-18
+
+### Added
+
+- **DODP v2 search via `getQuestions` (best-effort).** v0.x
+  returned an empty `SearchResult` regardless of input.
+  v0.9 drives the question/userResponse flow up to one
+  round-trip beyond the initial probe:
+
+  1. `getQuestions([])` -- discover the entry shape.
+  2. If the server returned a contentList directly, parse
+     it as search hits.
+  3. Else, find the first `inputQuestion`/`question` id in
+     the response, build a userResponse with the user's
+     query, and call `getQuestions` again.
+  4. If that response is a contentList, parse + return.
+     Multi-step search flows (a chain of questions) and
+     unrecognised shapes return an empty result instead
+     of guessing.
+
+  Catches `DodpFault` on either call so servers that
+  don't implement getQuestions get the existing
+  "no matches" behaviour rather than a 500.
+
+- **Attribute-bearing param shape in the SOAP builder.**
+  The DODP v2 `userResponse` element carries
+  `questionID` and `value` as XML attributes, not child
+  elements. `_append_param` now treats dict keys
+  starting with `@` as attributes on the parent element,
+  matching the convention `_element_to_dict` already
+  uses on the parse side.
+
+### Tests
+
+4 new (no-session short-circuit rename, full
+two-step flow with query round-trip, server-doesn't-
+implement-search fault path, multi-step give-up path).
+45 total.
+
 ## [0.8.0] - 2026-05-18
 
 ### Added

@@ -672,15 +672,152 @@ async def test_mark_announcements_as_read_empty_list_is_noop(install_transport):
     assert ok is True
 
 
-async def test_search_returns_empty_without_calling_dodp(install_transport):
+async def test_search_returns_empty_without_session(install_transport):
+    """No session = no upstream call. Pre-auth or post-drop
+    search requests degrade to an empty SearchResult without
+    pinging the DODP server."""
     def handler(_: httpx.Request) -> httpx.Response:  # pragma: no cover
-        raise AssertionError("DODP server should not be called for search")
+        raise AssertionError("DODP server should not be called without session")
 
     plugin, transport = _plugin(handler)
     install_transport(transport)
     result = await plugin.search("alice", "query", None, page=1)
     assert result.books == []
     assert result.total_results == 0
+
+
+async def test_search_uses_getQuestions_flow(install_transport):
+    """v0.9: search runs the two-step DODP question flow.
+    Pin that the user's query goes out as a userResponse on
+    the second call, and that the returned contentItems
+    surface as BookRecords."""
+    seen_responses: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getQuestions" in body:
+            # First call: no userResponse children -> return
+            # an input question. Second call: userResponse
+            # present -> return a contentList.
+            if "userResponse " in body or "userResponse>" in body:
+                # Capture the value attribute the plugin sent.
+                import re as re_mod
+                match = re_mod.search(r'value="([^"]+)"', body)
+                if match:
+                    seen_responses.append(match.group(1))
+                return httpx.Response(
+                    200,
+                    text=soap_envelope(
+                        f'<getQuestionsResponse xmlns="{DNS}">'
+                        f'  <contentList id="search-results">'
+                        f'    <contentItem id="hit-1">'
+                        f'      <label><text>Harry Potter</text></label>'
+                        f'    </contentItem>'
+                        f'    <contentItem id="hit-2">'
+                        f'      <label><text>Harry Potter II</text></label>'
+                        f'    </contentItem>'
+                        f'  </contentList>'
+                        f'</getQuestionsResponse>'
+                    ),
+                )
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getQuestionsResponse xmlns="{DNS}">'
+                    f'  <questions>'
+                    f'    <inputQuestion id="search.term">'
+                    f'      <label><text>What are you looking for?</text></label>'
+                    f'      <inputTypes><input>TEXT_ALPHANUMERIC</input></inputTypes>'
+                    f'    </inputQuestion>'
+                    f'  </questions>'
+                    f'</getQuestionsResponse>'
+                ),
+            )
+        raise AssertionError(body[:80])
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    await plugin.authenticate("alice", "pw")
+    result = await plugin.search("alice", "harry", None, page=1)
+    assert result.total_results == 2
+    titles = [b.title for b in result.books]
+    assert titles == ["Harry Potter", "Harry Potter II"]
+    # The user's query landed in the userResponse attribute on
+    # the second call.
+    assert seen_responses == ["harry"]
+
+
+async def test_search_returns_empty_on_unsupported_server(install_transport):
+    """Servers without getQuestions fault on the first call.
+    Plugin must catch + return empty rather than crash."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getQuestions" in body:
+            return httpx.Response(200, text=soap_fault("operation not supported"))
+        raise AssertionError(body[:80])
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    await plugin.authenticate("alice", "pw")
+    result = await plugin.search("alice", "harry", None, page=1)
+    assert result.books == []
+    assert result.total_results == 0
+
+
+async def test_search_returns_empty_on_multi_step_flow(install_transport):
+    """If the second getQuestions response is yet another
+    question (multi-step search), give up. Pin that the
+    plugin doesn't blow past the one-round budget."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getQuestions" in body:
+            # Always return more questions; never a contentList.
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getQuestionsResponse xmlns="{DNS}">'
+                    f'  <questions>'
+                    f'    <inputQuestion id="q-next">'
+                    f'      <label><text>narrow further</text></label>'
+                    f'    </inputQuestion>'
+                    f'  </questions>'
+                    f'</getQuestionsResponse>'
+                ),
+            )
+        raise AssertionError(body[:80])
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    await plugin.authenticate("alice", "pw")
+    result = await plugin.search("alice", "harry", None, page=1)
+    assert result.books == []
 
 
 # -- bookmarks ----------------------------------------------

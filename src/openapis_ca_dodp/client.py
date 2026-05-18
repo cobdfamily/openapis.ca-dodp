@@ -317,6 +317,42 @@ class DodpClient:
         )
         return self._element_to_dict(root)
 
+    async def get_questions(
+        self,
+        http: httpx.AsyncClient,
+        user_responses: list[dict[str, str]] | None = None,
+    ) -> etree._Element:
+        """Drive the DODP v2 question/answer search flow.
+
+        On the first call (``user_responses`` empty or None) the
+        server returns either an entry question OR a
+        contentList directly. The caller picks the right path:
+        if it's a contentList, parse + return; if a question,
+        build a userResponse with the user's input and call
+        again.
+
+        Returns the parsed response element so callers can
+        inspect both shapes. The DODP v2 question protocol is
+        recursive in principle; this client commits to handling
+        at most one round-trip beyond the initial probe (v1's
+        scope is "simple text search"; multi-step / faceted
+        flows are caller responsibility).
+        """
+        params: dict[str, Any] = {}
+        if user_responses:
+            # Map [{"questionID": "x", "value": "y"}, ...] to
+            # the DODP wire shape: <userResponses> wrapping one
+            # <userResponse questionID=... value=.../> per
+            # entry. The @-prefixed dict keys land as XML
+            # attributes via _append_param.
+            params["userResponses"] = {
+                "userResponse": [
+                    {"@questionID": r["questionID"], "@value": r["value"]}
+                    for r in user_responses
+                ],
+            }
+        return await self._call(http, "getQuestions", params)
+
     async def get_service_announcements(
         self, http: httpx.AsyncClient,
     ) -> list[Announcement]:
@@ -459,11 +495,20 @@ class DodpClient:
     ) -> None:
         """Recursively render a parameter. Nested dicts become
         nested elements (used by ``bookmarkSet``); lists become
-        repeated sibling elements with the same tag."""
+        repeated sibling elements with the same tag. Keys
+        starting with ``@`` become XML attributes on the parent
+        element rather than child elements -- needed for the
+        DODP v2 ``<userResponse questionID="..." value="..."/>``
+        shape (the spec puts those on the element rather than
+        in child tags).
+        """
         if isinstance(value, dict):
             child = etree.SubElement(parent, f"{{{self.namespace}}}{name}")
             for sub_name, sub_value in value.items():
-                self._append_param(child, sub_name, sub_value)
+                if sub_name.startswith("@"):
+                    child.set(sub_name[1:], str(sub_value))
+                else:
+                    self._append_param(child, sub_name, sub_value)
             return
         if isinstance(value, list):
             for entry in value:
