@@ -36,7 +36,13 @@ from hummingbird.models import BookRecord, FormatEntry, SearchResult
 from hummingbird.plugins import Plugin
 
 from . import config, sessions
-from .client import ContentResource, DodpAuthFault, DodpClient, DodpFault
+from .client import (
+    Announcement,
+    ContentResource,
+    DodpAuthFault,
+    DodpClient,
+    DodpFault,
+)
 
 
 logger = logging.getLogger("openapis_ca_dodp.plugin")
@@ -269,6 +275,30 @@ class OpenapisDodpPlugin(Plugin):
             return False
 
         sessions.put(username, sessions.UserSession(http=http))
+
+        # Surface any unread operator messages in the log so
+        # ops can see them at `docker logs` time. Hummingbird
+        # doesn't yet have a hook to relay announcements to the
+        # end user; once it does, the plugin's public
+        # service_announcements() method below is what the
+        # hook should call.
+        try:
+            anns = await self._client.get_service_announcements(http)
+            unread = [a for a in anns if not a.read]
+            if unread:
+                logger.info(
+                    "DODP service has %d unread announcement(s) "
+                    "for %s: %s",
+                    len(unread), username,
+                    [f"{a.id}:{a.text[:60]}" for a in unread],
+                )
+        except DodpFault as exc:
+            # Spec lets servers omit announcements; if it faults
+            # here we treat as "no announcements" and move on.
+            logger.debug(
+                "getServiceAnnouncements unavailable for %s: %s",
+                username, exc.faultstring,
+            )
         return True
 
     # -- bookshelf ---------------------------------------------
@@ -357,6 +387,56 @@ class OpenapisDodpPlugin(Plugin):
             logger.warning(
                 "%s failed for %s/%s: %s",
                 action, username, dodp_id, exc.faultstring,
+            )
+            return False
+
+    # -- service announcements (v0.7) ---------------------------
+
+    async def service_announcements(
+        self, username: str,
+    ) -> list[Announcement]:
+        """Return the upstream's operator-message list for the
+        user. Not part of the Hummingbird abstract Plugin contract
+        -- exposed for future hummingbird endpoints that surface
+        announcements to the DAISY player. Empty list on no-
+        session / fault."""
+        sess = sessions.get(username)
+        if sess is None or self._client is None:
+            return []
+        try:
+            return await self._client.get_service_announcements(sess.http)
+        except DodpAuthFault:
+            await sessions.drop(username)
+            return []
+        except DodpFault as exc:
+            logger.warning(
+                "getServiceAnnouncements failed for %s: %s",
+                username, exc.faultstring,
+            )
+            return []
+
+    async def mark_announcements_as_read(
+        self, username: str, announcement_ids: list[str],
+    ) -> bool:
+        """Mark the listed announcements as read upstream so they
+        don't resurface on the next login. False on no-session /
+        fault."""
+        sess = sessions.get(username)
+        if sess is None or self._client is None:
+            return False
+        if not announcement_ids:
+            return True
+        try:
+            return await self._client.mark_announcements_as_read(
+                sess.http, announcement_ids,
+            )
+        except DodpAuthFault:
+            await sessions.drop(username)
+            return False
+        except DodpFault as exc:
+            logger.warning(
+                "markAnnouncementsAsRead failed for %s: %s",
+                username, exc.faultstring,
             )
             return False
 

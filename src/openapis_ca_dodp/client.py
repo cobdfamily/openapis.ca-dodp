@@ -89,6 +89,20 @@ class ContentResource:
     local_uri: str | None
 
 
+@dataclass(slots=True)
+class Announcement:
+    """A DODP service announcement: an operator message
+    targeted at a user. DAISY clients display the text; the
+    ``read`` flag persists upstream so a user doesn't see
+    the same announcement on every login."""
+
+    id: str
+    text: str
+    type: str | None = None
+    priority: str | None = None
+    read: bool = False
+
+
 class DodpClient:
     """Stateless DODP SOAP client. Stateless meaning the client
     holds no per-request state -- the caller supplies an
@@ -302,6 +316,46 @@ class DodpClient:
             http, "getBookmarks", {"contentID": content_id},
         )
         return self._element_to_dict(root)
+
+    async def get_service_announcements(
+        self, http: httpx.AsyncClient,
+    ) -> list[Announcement]:
+        """List operator messages targeted at the logged-in user.
+        Returns an empty list if the server has no announcements
+        or doesn't implement the operation (faults bubble up as
+        DodpFault for the caller to log + ignore)."""
+        root = await self._call(http, "getServiceAnnouncements", {})
+        out: list[Announcement] = []
+        for ann in root.iter(f"{{{self.namespace}}}announcement"):
+            text_el = ann.find(f"{{{self.namespace}}}text")
+            out.append(
+                Announcement(
+                    id=ann.get("id") or "",
+                    text=(text_el.text if text_el is not None else "") or "",
+                    type=ann.get("type"),
+                    priority=ann.get("priority"),
+                    read=(ann.get("read") or "").lower() == "true",
+                )
+            )
+        return out
+
+    async def mark_announcements_as_read(
+        self, http: httpx.AsyncClient, announcement_ids: list[str],
+    ) -> bool:
+        """Mark one or more announcements as read upstream so they
+        don't resurface on the next login. The DODP body shape
+        wraps each id in an ``<item>`` element inside a ``<read>``
+        wrapper -- _append_param's list-repeat behaviour handles
+        the ``<item>`` repetition by itself.
+        """
+        if not announcement_ids:
+            return True
+        root = await self._call(
+            http,
+            "markAnnouncementsAsRead",
+            {"read": {"item": list(announcement_ids)}},
+        )
+        return self._result_bool(root, "markAnnouncementsAsRead")
 
     async def set_bookmarks(
         self,

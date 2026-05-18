@@ -5,6 +5,40 @@ Versioning: SemVer; pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-18
+
+### Added
+
+- **DODP service announcements** (`getServiceAnnouncements`
+  + `markAnnouncementsAsRead`). Operator messages targeted at
+  a specific user (eg. "library closing Friday"). DAISY
+  players render them above the bookshelf.
+
+  Surfaced two ways:
+
+  - **At authenticate time**, the plugin now polls
+    `getServiceAnnouncements` and logs any unread entries at
+    INFO. Operators see them in `docker logs` without
+    needing a new endpoint. Fault here is non-fatal; the
+    spec allows servers to omit the operation.
+
+  - **Plugin methods**
+    `service_announcements(username)` and
+    `mark_announcements_as_read(username, ids)`. NOT part of
+    the Hummingbird abstract Plugin contract (the upstream
+    hasn't shipped the hook yet); exposed for the future
+    `/v1/announcements` REST endpoint to call when it lands.
+
+### Tests
+
+3 new (lists_unread, mark_as_read wire shape, empty-list
+no-op short-circuit). 39 total. Conftest's
+`authenticated_handshake` wrapper now answers
+getServiceAnnouncements alongside the other post-logOn
+calls; the wrapper also flipped to "inner handler wins"
+ordering so tests can opt-in to their own announcement
+responses without restating the whole handshake.
+
 ## [0.6.0] - 2026-05-18
 
 ### Added

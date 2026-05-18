@@ -75,14 +75,25 @@ def _dodp_ns() -> str:
 def authenticated_handshake(handler: SoapHandler) -> SoapHandler:
     """Wrap a SOAP handler so it transparently answers the post-
     logOn handshake calls (getServiceAttributes +
-    setReadingSystemAttributes). Lets per-test handlers focus on
-    the operation under test instead of re-implementing the
+    setReadingSystemAttributes) + the v0.7 post-auth
+    getServiceAnnouncements probe. Lets per-test handlers focus
+    on the operation under test instead of re-implementing the
     handshake boilerplate.
     """
 
     ns = _dodp_ns()
 
     def wrapper(request: httpx.Request) -> httpx.Response:
+        # Inner handler wins: tests that want to exercise the
+        # handshake path supply their own response by handling
+        # the matching SOAPAction. The canned fallbacks only
+        # kick in if the inner handler raises AssertionError
+        # (the "unexpected SOAP body" signal pattern used by
+        # the rest of the test suite).
+        try:
+            return handler(request)
+        except AssertionError:
+            pass
         body = request.content.decode()
         if "getServiceAttributes" in body:
             return httpx.Response(
@@ -105,6 +116,17 @@ def authenticated_handshake(handler: SoapHandler) -> SoapHandler:
                     f'</setReadingSystemAttributesResponse>'
                 ),
             )
+        if "getServiceAnnouncements" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getServiceAnnouncementsResponse xmlns="{ns}">'
+                    f'  <announcements/>'
+                    f'</getServiceAnnouncementsResponse>'
+                ),
+            )
+        # Inner handler raised but no canned response matched
+        # either -- re-raise so the test sees the real shape.
         return handler(request)
 
     return wrapper

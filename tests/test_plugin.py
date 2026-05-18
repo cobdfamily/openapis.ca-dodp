@@ -152,6 +152,16 @@ async def test_authenticate_runs_dodp_handshake(install_transport):
                     f'</setReadingSystemAttributesResponse>'
                 ),
             )
+        if "getServiceAnnouncements" in body:
+            seen.append("getServiceAnnouncements")
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getServiceAnnouncementsResponse xmlns="{DNS}">'
+                    f'  <announcements/>'
+                    f'</getServiceAnnouncementsResponse>'
+                ),
+            )
         raise AssertionError(body[:120])
 
     plugin, transport = _plugin(handler, wrap_handshake=False)
@@ -159,7 +169,10 @@ async def test_authenticate_runs_dodp_handshake(install_transport):
     ok = await plugin.authenticate("alice", "pw")
     assert ok is True
     assert seen == [
-        "logOn", "getServiceAttributes", "setReadingSystemAttributes",
+        "logOn",
+        "getServiceAttributes",
+        "setReadingSystemAttributes",
+        "getServiceAnnouncements",
     ]
 
 
@@ -192,6 +205,16 @@ async def test_authenticate_tolerates_getServiceAttributes_fault(install_transpo
                     f'<setReadingSystemAttributesResponse xmlns="{DNS}">'
                     f'<setReadingSystemAttributesResult>true</setReadingSystemAttributesResult>'
                     f'</setReadingSystemAttributesResponse>'
+                ),
+            )
+        if "getServiceAnnouncements" in body:
+            seen.append("getServiceAnnouncements")
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getServiceAnnouncementsResponse xmlns="{DNS}">'
+                    f'  <announcements/>'
+                    f'</getServiceAnnouncementsResponse>'
                 ),
             )
         raise AssertionError(body[:120])
@@ -542,6 +565,113 @@ async def test_remove_to_bookshelf_with_unknown_int_lazily_refreshes(install_tra
 # -- search -------------------------------------------------
 
 
+async def test_service_announcements_lists_unread(install_transport):
+    """Plugin.service_announcements should return whatever the
+    upstream's getServiceAnnouncements returned, as
+    Announcement objects."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "getServiceAnnouncements" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<getServiceAnnouncementsResponse xmlns="{DNS}">'
+                    f'  <announcements>'
+                    f'    <announcement id="a-1" priority="high" read="false">'
+                    f'      <text>Library closing Friday</text>'
+                    f'    </announcement>'
+                    f'    <announcement id="a-2" read="true">'
+                    f'      <text>You renewed Book X</text>'
+                    f'    </announcement>'
+                    f'  </announcements>'
+                    f'</getServiceAnnouncementsResponse>'
+                ),
+            )
+        raise AssertionError(body[:80])
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    await plugin.authenticate("alice", "pw")
+    anns = await plugin.service_announcements("alice")
+    assert {a.id for a in anns} == {"a-1", "a-2"}
+    unread = [a for a in anns if not a.read]
+    assert len(unread) == 1
+    assert unread[0].id == "a-1"
+    assert "Library closing" in unread[0].text
+    assert unread[0].priority == "high"
+
+
+async def test_mark_announcements_as_read(install_transport):
+    """The SOAP body for markAnnouncementsAsRead must wrap each
+    id in <item> inside <read>. Pin the wire shape -- the
+    singular <item> tag is easy to get wrong."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        if "logOn" in body:
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<logOnResponse xmlns="{DNS}">'
+                    f'<logOnResult>true</logOnResult>'
+                    f'</logOnResponse>'
+                ),
+            )
+        if "markAnnouncementsAsRead" in body:
+            captured["body"] = body
+            return httpx.Response(
+                200,
+                text=soap_envelope(
+                    f'<markAnnouncementsAsReadResponse xmlns="{DNS}">'
+                    f'<markAnnouncementsAsReadResult>true</markAnnouncementsAsReadResult>'
+                    f'</markAnnouncementsAsReadResponse>'
+                ),
+            )
+        raise AssertionError(body[:80])
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    await plugin.authenticate("alice", "pw")
+    ok = await plugin.mark_announcements_as_read("alice", ["a-1", "a-2"])
+    assert ok is True
+    sent = captured["body"]
+    # Two <item> children under one <read> wrapper.
+    assert sent.count("<item") >= 2 or sent.count(":item") >= 2
+    assert sent.count("</read>") == 1 or sent.count(":read>") >= 2
+
+
+async def test_mark_announcements_as_read_empty_list_is_noop(install_transport):
+    """Empty input must short-circuit without touching the
+    server (avoids a useless SOAP round-trip and a server
+    that may fault on zero items)."""
+    def handler(_: httpx.Request) -> httpx.Response:  # pragma: no cover
+        # Only the logOn happens; mark is short-circuited.
+        return httpx.Response(
+            200,
+            text=soap_envelope(
+                f'<logOnResponse xmlns="{DNS}">'
+                f'<logOnResult>true</logOnResult>'
+                f'</logOnResponse>'
+            ),
+        )
+
+    plugin, transport = _plugin(handler)
+    install_transport(transport)
+    await plugin.authenticate("alice", "pw")
+    ok = await plugin.mark_announcements_as_read("alice", [])
+    assert ok is True
+
+
 async def test_search_returns_empty_without_calling_dodp(install_transport):
     def handler(_: httpx.Request) -> httpx.Response:  # pragma: no cover
         raise AssertionError("DODP server should not be called for search")
@@ -709,9 +839,12 @@ async def test_download_picks_resource_matching_requested_fmt(install_transport,
                     f'</getContentResourcesResponse>'
                 ),
             )
-        # Resource fetch
-        served_url = str(request.url)
-        return httpx.Response(200, content=b"ZIP_BYTES")
+        if not body:
+            # GET request to a resource URL (no SOAP envelope).
+            served_url = str(request.url)
+            return httpx.Response(200, content=b"ZIP_BYTES")
+        # Unknown SOAP op -> let the handshake wrapper handle it.
+        raise AssertionError(f"unhandled SOAP body: {body[:80]}")
 
     plugin, transport = _plugin(handler)
     install_transport(transport)
@@ -767,7 +900,9 @@ async def test_download_falls_back_when_requested_fmt_unavailable(install_transp
                     f'</getContentResourcesResponse>'
                 ),
             )
-        return httpx.Response(200, content=b"MP3_BYTES")
+        if not body:
+            return httpx.Response(200, content=b"MP3_BYTES")
+        raise AssertionError(f"unhandled SOAP body: {body[:80]}")
 
     plugin, transport = _plugin(handler)
     install_transport(transport)
