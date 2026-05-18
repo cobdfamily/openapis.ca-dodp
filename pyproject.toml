@@ -54,3 +54,21 @@ testpaths = ["tests"]
 line-length = 100
 target-version = "py312"
 src = ["src"]
+
+[tool.coverage.run]
+source = ["src/openapis_ca_dodp"]
+branch = true
+
+[tool.coverage.report]
+# Floor sits a few points below current (~82%) so a small dip
+# doesn't block merges, but a structural regression (>10pt drop)
+# fails CI. The gap is mostly auth-fault recovery branches in
+# the plugin that need a per-hook fault test each; bump once
+# those tests land.
+fail_under = 78
+show_missing = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "pragma: no cover",
+]
