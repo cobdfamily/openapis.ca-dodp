@@ -5,6 +5,46 @@ Versioning: SemVer; pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-19
+
+### Changed (BREAKING)
+
+- **Repo, package, image, env-var names all consolidated
+  to `openapi-dodp`** (was: `openapis.ca-dodp` with at
+  least four different forms floating around --
+  `openapis-ca-dodp`, `openapis_ca_dodp`, `openapis_dodp`,
+  etc.). Single canonical spelling now, aligned with the
+  `openapi-kados` sibling.
+
+  Breaking points for downstream consumers:
+
+  - **Image:**
+    `kibble.apps.blindhub.ca/cobdfamily/openapis.ca-dodp:*`
+    -> `kibble.apps.blindhub.ca/cobdfamily/openapi-dodp:*`.
+  - **GitHub repo:** `cobdfamily/openapis.ca-dodp` ->
+    `cobdfamily/openapi-dodp`. GitHub auto-redirects the
+    old URL so existing clones keep working until they
+    `git remote set-url`.
+  - **Python dist:** `openapis-ca-dodp` -> `openapi-dodp`.
+  - **Python module:** `openapis_ca_dodp` -> `openapi_dodp`.
+  - **Entry-point key + `HUMMINGBIRD_PLUGIN` value:**
+    `openapis_dodp` -> `openapi_dodp`.
+  - **Env-var prefix:** `OPENAPIS_DODP_*` -> `OPENAPI_DODP_*`.
+  - **Plugin class:**
+    `OpenapisDodpPlugin` -> `OpenapiDodpPlugin`.
+
+  No image had been published for `openapis.ca-dodp:*`
+  on kibble at the time of the rename (registry-cleanup
+  audit confirmed), so the deprecation surface is local
+  dev fixtures + operator env files only.
+
+- **CI workflow actions bumped to the Node-24-compatible
+  majors** (checkout@v6, setup-python@v6, cache@v5).
+
+### Tests
+
+45 tests pass under the new module/dist names; ruff clean.
+
 ## [0.9.0] - 2026-05-18
 
 ### Added
