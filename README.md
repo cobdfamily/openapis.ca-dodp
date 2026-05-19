@@ -1,4 +1,4 @@
-# openapis.ca-dodp
+# openapi-dodp
 
 Hummingbird plugin that proxies to a [DAISY Online Delivery
 Protocol][dodp] (DODP) backend. Lets a [Hummingbird][hb] server
@@ -17,7 +17,7 @@ re-authenticate via Basic auth and the plugin re-issues `logOn`.
 ```
 DAISY player ─ HTTP+Basic ─▶ Hummingbird ─ SOAP/DODP ─▶ KADOS / other DODP server
                                   │
-                                  └─ openapis.ca-dodp plugin
+                                  └─ openapi-dodp plugin
 ```
 
 Compare to NNELS, which speaks Playwright/HTTP scraping to
@@ -27,7 +27,7 @@ nnels.ca. Same Hummingbird front; different backend protocol.
 
 ```sh
 # Inside the hummingbird image / venv:
-pip install openapis-ca-dodp
+pip install openapi-dodp
 ```
 
 For local development against an editable hummingbird:
@@ -41,12 +41,12 @@ uv run pytest
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `HUMMINGBIRD_PLUGIN` | (unset) | Must be `openapis_dodp` to select this plugin. |
-| `OPENAPIS_DODP_BASE_URL` | (empty) | DODP SOAP endpoint URL. Required. |
-| `OPENAPIS_DODP_NAMESPACE` | `http://www.daisy.org/ns/daisy-online/` | Override only for non-conformant impls. |
-| `OPENAPIS_DODP_BOOKSHELF_LIST_ID` | `issued` | DODP `getContentList` id used as the bookshelf. |
-| `OPENAPIS_DODP_USER_AGENT` | `openapis.ca-dodp/0.1` | Sent on every SOAP call. |
-| `OPENAPIS_DODP_REQUEST_TIMEOUT_SECONDS` | `30` | Per-request timeout in seconds. |
+| `HUMMINGBIRD_PLUGIN` | (unset) | Must be `openapi_dodp` to select this plugin. |
+| `OPENAPI_DODP_BASE_URL` | (empty) | DODP SOAP endpoint URL. Required. |
+| `OPENAPI_DODP_NAMESPACE` | `http://www.daisy.org/ns/daisy-online/` | Override only for non-conformant impls. |
+| `OPENAPI_DODP_BOOKSHELF_LIST_ID` | `issued` | DODP `getContentList` id used as the bookshelf. |
+| `OPENAPI_DODP_USER_AGENT` | `openapi-dodp/0.1` | Sent on every SOAP call. |
+| `OPENAPI_DODP_REQUEST_TIMEOUT_SECONDS` | `30` | Per-request timeout in seconds. |
 
 ## Plugin hooks
 

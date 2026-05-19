@@ -1,5 +1,5 @@
 """End-to-end: boot Hummingbird with HUMMINGBIRD_PLUGIN=
-openapis_dodp, intercept the DODP SOAP traffic with
+openapi_dodp, intercept the DODP SOAP traffic with
 httpx.MockTransport, then hit Hummingbird's REST surface with
 Basic auth and verify the bookshelf flows through this plugin.
 
@@ -16,8 +16,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from openapis_ca_dodp import sessions
-from openapis_ca_dodp.client import DEFAULT_DODP_NS, DodpClient
+from openapi_dodp import sessions
+from openapi_dodp.client import DEFAULT_DODP_NS, DodpClient
 
 from tests.conftest import authenticated_handshake, soap_envelope
 
@@ -35,17 +35,17 @@ def hb_app(monkeypatch):
     """Boot a fresh hummingbird app with the plugin selected
     via env. Reset the auth cache + plugin loader so the
     selection takes effect for THIS test."""
-    monkeypatch.setenv("HUMMINGBIRD_PLUGIN", "openapis_dodp")
-    monkeypatch.setenv("OPENAPIS_DODP_BASE_URL", "https://dodp.example/svc")
+    monkeypatch.setenv("HUMMINGBIRD_PLUGIN", "openapi_dodp")
+    monkeypatch.setenv("OPENAPI_DODP_BASE_URL", "https://dodp.example/svc")
 
     # Both hummingbird and this plugin pin their settings as
     # module-level singletons constructed at import time. Mutate
     # the live object so any consumer that already imported it
     # (hummingbird.plugins did) sees the new value.
     import hummingbird.config as hb_cfg
-    hb_cfg.settings.plugin = "openapis_dodp"
+    hb_cfg.settings.plugin = "openapi_dodp"
 
-    import openapis_ca_dodp.config as cfg
+    import openapi_dodp.config as cfg
     cfg.settings.base_url = "https://dodp.example/svc"
 
     import hummingbird.plugins as P
@@ -135,18 +135,18 @@ def test_bookshelf_flows_through_plugin(hb_app, monkeypatch):
 
 def test_unconfigured_plugin_returns_empty_bookshelf(monkeypatch):
     """Operator boots hummingbird with the plugin selected but
-    forgot to set OPENAPIS_DODP_BASE_URL. Plugin loads, logs a
+    forgot to set OPENAPI_DODP_BASE_URL. Plugin loads, logs a
     warning, and every hook returns its empty fallback so the
     service still serves coherently."""
-    monkeypatch.setenv("HUMMINGBIRD_PLUGIN", "openapis_dodp")
-    monkeypatch.delenv("OPENAPIS_DODP_BASE_URL", raising=False)
+    monkeypatch.setenv("HUMMINGBIRD_PLUGIN", "openapi_dodp")
+    monkeypatch.delenv("OPENAPI_DODP_BASE_URL", raising=False)
 
     import hummingbird.plugins as P
     P._active = None
     P._loaded = False
     import hummingbird.auth as A
     A._VALIDATED.clear()
-    import openapis_ca_dodp.config as cfg
+    import openapi_dodp.config as cfg
     cfg.settings = cfg.Settings()
     # Force the plugin instance held in P._active to use the
     # newly-rebuilt settings (the cls()-instantiation reads
@@ -170,10 +170,10 @@ def test_dodp_client_used_as_module_singleton(monkeypatch):
     Hummingbird's loader (no test injection), the DodpClient is
     built from settings -- not None. The previous version
     crashed at instantiation; this pins that fix."""
-    monkeypatch.setenv("OPENAPIS_DODP_BASE_URL", "https://dodp.example/svc")
-    import openapis_ca_dodp.config as cfg
+    monkeypatch.setenv("OPENAPI_DODP_BASE_URL", "https://dodp.example/svc")
+    import openapi_dodp.config as cfg
     cfg.settings = cfg.Settings()
-    from openapis_ca_dodp.plugin import OpenapisDodpPlugin
-    p = OpenapisDodpPlugin()
+    from openapi_dodp.plugin import OpenapiDodpPlugin
+    p = OpenapiDodpPlugin()
     assert isinstance(p._client, DodpClient)
     assert p._client.base_url == "https://dodp.example/svc"

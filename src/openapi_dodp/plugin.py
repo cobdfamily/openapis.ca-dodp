@@ -1,4 +1,4 @@
-"""openapis.ca-dodp -- Hummingbird plugin backed by a DODP server.
+"""openapi-dodp -- Hummingbird plugin backed by a DODP server.
 
 Maps the Hummingbird 8-hook plugin contract onto DAISY Online
 Delivery Protocol calls:
@@ -48,7 +48,7 @@ from .client import (
 )
 
 
-logger = logging.getLogger("openapis_ca_dodp.plugin")
+logger = logging.getLogger("openapi_dodp.plugin")
 
 
 # DODP doesn't expose per-format BookRecord-friendly catalog at
@@ -134,12 +134,12 @@ def _summarise_service_attrs(caps: dict) -> dict:
     }
 
 
-class OpenapisDodpPlugin(Plugin):
+class OpenapiDodpPlugin(Plugin):
     """Speaks DODP to the configured base URL on behalf of the
     Hummingbird user. Each Hummingbird user gets one DODP session
     (cookie jar) shared across all hooks."""
 
-    name = "openapis_dodp"
+    name = "openapi_dodp"
 
     def __init__(self, client: DodpClient | None = None) -> None:
         # Allow injection for tests; otherwise build a client
@@ -162,7 +162,7 @@ class OpenapisDodpPlugin(Plugin):
             )
         else:
             logger.warning(
-                "OPENAPIS_DODP_BASE_URL is not set -- plugin is "
+                "OPENAPI_DODP_BASE_URL is not set -- plugin is "
                 "loaded but every hook will be a no-op until "
                 "the URL is configured and hummingbird restarts.",
             )

@@ -1,5 +1,5 @@
 [project]
-name = "openapis-ca-dodp"
+name = "openapi-dodp"
 version = "0.9.0"
 description = "Hummingbird plugin that proxies to a DAISY Online Delivery Protocol (DODP) backend"
 readme = "README.md"
@@ -8,7 +8,7 @@ requires-python = ">=3.12"
 # `hummingbird` is intentionally NOT a runtime dependency: this
 # plugin is meant to be installed into an existing hummingbird
 # container/venv, where hummingbird is already on PYTHONPATH.
-# Listing it here would force `pip install openapis-ca-dodp` to
+# Listing it here would force `pip install openapi-dodp` to
 # resolve a package that is not on PyPI. Same pattern as nnels.
 dependencies = [
   "httpx>=0.27",
@@ -18,10 +18,10 @@ dependencies = [
 ]
 
 # Register the plugin so hummingbird's entry-point discovery
-# picks it up. Operators set HUMMINGBIRD_PLUGIN=openapis_dodp
+# picks it up. Operators set HUMMINGBIRD_PLUGIN=openapi_dodp
 # in their env to switch the active plugin to this one.
 [project.entry-points."hummingbird.plugins"]
-openapis_dodp = "openapis_ca_dodp.plugin:OpenapisDodpPlugin"
+openapi_dodp = "openapi_dodp.plugin:OpenapiDodpPlugin"
 
 [dependency-groups]
 dev = [
@@ -43,7 +43,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/openapis_ca_dodp"]
+packages = ["src/openapi_dodp"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -56,7 +56,7 @@ target-version = "py312"
 src = ["src"]
 
 [tool.coverage.run]
-source = ["src/openapis_ca_dodp"]
+source = ["src/openapi_dodp"]
 branch = true
 
 [tool.coverage.report]

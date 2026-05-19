@@ -61,14 +61,14 @@ def make_http() -> Callable[[SoapHandler], httpx.AsyncClient]:
 def _clean_sessions():
     """Reset the per-user DODP session map between tests so the
     plugin starts each test in a known state."""
-    from openapis_ca_dodp import sessions
+    from openapi_dodp import sessions
     sessions._clear_for_tests()
     yield
     sessions._clear_for_tests()
 
 
 def _dodp_ns() -> str:
-    from openapis_ca_dodp.client import DEFAULT_DODP_NS
+    from openapi_dodp.client import DEFAULT_DODP_NS
     return DEFAULT_DODP_NS
 
 

@@ -1,6 +1,6 @@
 # Deployment
 
-`openapis.ca-dodp` ships as a container image to the kibble
+`openapi-dodp` ships as a container image to the kibble
 registry on every `git tag v*`. It bakes the Hummingbird base
 image + this plugin, so operators run **one image** instead of
 running stock hummingbird and pip-installing the plugin at
@@ -39,8 +39,8 @@ git push origin v0.5.0
 
 Within a couple of minutes:
 
-- `kibble.apps.blindhub.ca/cobdfamily/openapis.ca-dodp:0.5.0`
-- `kibble.apps.blindhub.ca/cobdfamily/openapis.ca-dodp:latest`
+- `kibble.apps.blindhub.ca/cobdfamily/openapi-dodp:0.5.0`
+- `kibble.apps.blindhub.ca/cobdfamily/openapi-dodp:latest`
 
 The Dockerfile derives from `kibble.apps.blindhub.ca/
 cobdfamily/hummingbird:latest` — a hummingbird release
@@ -48,17 +48,17 @@ trickles down here on the next CI run (or the nightly).
 
 ## Configure
 
-The plugin reads `OPENAPIS_DODP_*` env vars. Defaults in
-`src/openapis_ca_dodp/config.py` are sized for KADOS-shape
+The plugin reads `OPENAPI_DODP_*` env vars. Defaults in
+`src/openapi_dodp/config.py` are sized for KADOS-shape
 deployments. For production, set:
 
 | Variable | Required? | Notes |
 | --- | --- | --- |
-| `OPENAPIS_DODP_BASE_URL` | **yes** | The DODP SOAP endpoint. Empty = plugin loads but every hook returns its empty fallback (and logs a warning at boot). |
-| `OPENAPIS_DODP_NAMESPACE` | no | Default `http://www.daisy.org/ns/daisy-online/`. Override only for non-conformant impls. |
-| `OPENAPIS_DODP_BOOKSHELF_LIST_ID` | no | DODP `getContentList` id used as the bookshelf. Default `issued`; KADOS uses this. Some servers use `current` or `loans`. |
-| `OPENAPIS_DODP_USER_AGENT` | no | Sent on every SOAP call. Default `openapis.ca-dodp/0.x`. Some servers log this. |
-| `OPENAPIS_DODP_REQUEST_TIMEOUT_SECONDS` | no | Per-call timeout. Default 30s. Increase for slow `getContentList` on large libraries. |
+| `OPENAPI_DODP_BASE_URL` | **yes** | The DODP SOAP endpoint. Empty = plugin loads but every hook returns its empty fallback (and logs a warning at boot). |
+| `OPENAPI_DODP_NAMESPACE` | no | Default `http://www.daisy.org/ns/daisy-online/`. Override only for non-conformant impls. |
+| `OPENAPI_DODP_BOOKSHELF_LIST_ID` | no | DODP `getContentList` id used as the bookshelf. Default `issued`; KADOS uses this. Some servers use `current` or `loans`. |
+| `OPENAPI_DODP_USER_AGENT` | no | Sent on every SOAP call. Default `openapi-dodp/0.x`. Some servers log this. |
+| `OPENAPI_DODP_REQUEST_TIMEOUT_SECONDS` | no | Per-call timeout. Default 30s. Increase for slow `getContentList` on large libraries. |
 
 Hummingbird's standalone-fallback creds (`HUMMINGBIRD_
 USERNAME` / `HUMMINGBIRD_PASSWORD`) are unused once this
@@ -72,9 +72,9 @@ truth. Leave them blank in `docker-compose.yaml`.
 
 ```sh
 cat > .env <<'EOF'
-OPENAPIS_DODP_BASE_URL=https://library.example.org/dodp/service
-OPENAPIS_DODP_HTTP_PORT=8000
-OPENAPIS_DODP_TAG=0.5.0
+OPENAPI_DODP_BASE_URL=https://library.example.org/dodp/service
+OPENAPI_DODP_HTTP_PORT=8000
+OPENAPI_DODP_TAG=0.5.0
 EOF
 
 docker compose up -d
@@ -83,12 +83,12 @@ docker compose up -d
 Or directly:
 
 ```sh
-docker run -d --name openapis-dodp \
+docker run -d --name openapi-dodp \
   -p 8000:8000 \
-  -e OPENAPIS_DODP_BASE_URL=https://library.example.org/dodp/service \
-  -v openapis-dodp-data:/app/data \
-  -v openapis-dodp-cache:/app/cache \
-  kibble.apps.blindhub.ca/cobdfamily/openapis.ca-dodp:latest
+  -e OPENAPI_DODP_BASE_URL=https://library.example.org/dodp/service \
+  -v openapi-dodp-data:/app/data \
+  -v openapi-dodp-cache:/app/cache \
+  kibble.apps.blindhub.ca/cobdfamily/openapi-dodp:latest
 ```
 
 ## Verify
@@ -111,7 +111,7 @@ curl -fsS http://localhost:8000/protocols/kados/v1/methods/logOn \
 
 If the bookshelf comes back empty even though the upstream
 has books for the user, the most likely cause is the DODP
-handshake — check `docker logs openapis-dodp` for a
+handshake — check `docker logs openapi-dodp` for a
 `setReadingSystemAttributes failed` warning. Real KADOS
 deployments occasionally reject the default reading-system
 identification; raise an issue with the rejection message.
@@ -120,7 +120,7 @@ identification; raise an issue with the rejection message.
 
 ```sh
 # Pin to a specific version in .env then redeploy.
-sed -i 's/^OPENAPIS_DODP_TAG=.*/OPENAPIS_DODP_TAG=0.5.1/' .env
+sed -i 's/^OPENAPI_DODP_TAG=.*/OPENAPI_DODP_TAG=0.5.1/' .env
 docker compose pull
 docker compose up -d
 ```
@@ -133,11 +133,11 @@ number.
 ## Common failure modes
 
 - **"plugin not found" at boot.** Check that
-  `HUMMINGBIRD_PLUGIN=openapis_dodp` is set. The Dockerfile
+  `HUMMINGBIRD_PLUGIN=openapi_dodp` is set. The Dockerfile
   sets it by default; an operator who passes
   `-e HUMMINGBIRD_PLUGIN=` (empty) explicitly disables it.
 
-- **"OPENAPIS_DODP_BASE_URL is not set" warning at boot,
+- **"OPENAPI_DODP_BASE_URL is not set" warning at boot,
   every request 401s.** The plugin loaded but has no
   upstream to talk to. Set the env var and restart.
 
@@ -149,7 +149,7 @@ number.
   a fork — config exposure is on the v0.6+ roadmap).
 
 - **Bookshelf empty though the user has issued content.**
-  The default `OPENAPIS_DODP_BOOKSHELF_LIST_ID=issued`
+  The default `OPENAPI_DODP_BOOKSHELF_LIST_ID=issued`
   isn't what your DODP server calls its active loans list.
   Try `current`, `loans`, or check the upstream's
   `getServiceAttributes` response in the logs for the

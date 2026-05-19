@@ -1,4 +1,4 @@
-"""Plugin-level tests: wire ``OpenapisDodpPlugin`` against a
+"""Plugin-level tests: wire ``OpenapiDodpPlugin`` against a
 mocked DODP server and assert the hummingbird-side contract.
 
 Tests exercise the hooks Hummingbird actually calls:
@@ -16,9 +16,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from openapis_ca_dodp import sessions
-from openapis_ca_dodp.client import DEFAULT_DODP_NS, DodpClient
-from openapis_ca_dodp.plugin import OpenapisDodpPlugin
+from openapi_dodp import sessions
+from openapi_dodp.client import DEFAULT_DODP_NS, DodpClient
+from openapi_dodp.plugin import OpenapiDodpPlugin
 
 from tests.conftest import (
     authenticated_handshake,
@@ -31,7 +31,7 @@ DNS = DEFAULT_DODP_NS
 CLIENT_URL = "https://dodp.example.org/service"
 
 
-def _plugin(handler, *, wrap_handshake: bool = True) -> tuple[OpenapisDodpPlugin, httpx.MockTransport]:
+def _plugin(handler, *, wrap_handshake: bool = True) -> tuple[OpenapiDodpPlugin, httpx.MockTransport]:
     """Build a plugin whose client points at the mocked DODP URL.
     The plugin internally builds its own httpx.AsyncClient on
     authenticate(); we intercept by passing the same transport
@@ -47,7 +47,7 @@ def _plugin(handler, *, wrap_handshake: bool = True) -> tuple[OpenapisDodpPlugin
         handler = authenticated_handshake(handler)
     transport = httpx.MockTransport(handler)
     client = DodpClient(base_url=CLIENT_URL, namespace=DNS)
-    plugin = OpenapisDodpPlugin(client=client)
+    plugin = OpenapiDodpPlugin(client=client)
     return plugin, transport
 
 
@@ -232,7 +232,7 @@ async def test_authenticate_fails_when_setReadingSystemAttributes_faults(install
     """The reading-system handshake IS load-bearing: if it
     faults, the user's later getContentList will fault, so we
     fail the auth up front to give a clean signal."""
-    from openapis_ca_dodp import sessions as sess_mod
+    from openapi_dodp import sessions as sess_mod
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = request.content.decode()
@@ -332,7 +332,7 @@ async def test_logoff_tolerates_server_fault(install_transport):
 
     plugin, transport = _plugin(handler)
     install_transport(transport)
-    from openapis_ca_dodp import sessions as sess_mod
+    from openapi_dodp import sessions as sess_mod
     await plugin.authenticate("alice", "pw")
     assert sess_mod.get("alice") is not None
     # logoff faults but should still nuke the local state.

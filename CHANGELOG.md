@@ -160,7 +160,7 @@ local-drop). 36 total.
   the `[tool.uv.sources]` block in `pyproject.toml`
   resolves it from `../hummingbird`.
 - **`[tool.coverage]` config** scoping reports to the
-  `openapis_ca_dodp` package + a `fail_under = 78` floor.
+  `openapi_dodp` package + a `fail_under = 78` floor.
   78% is the v0.x baseline; expected to climb as auth-
   fault-recovery branches gain per-hook coverage.
 
@@ -214,19 +214,19 @@ total.
 ### Added
 
 - **Dockerfile** — cobdfamily/hummingbird base + this plugin
-  pip-installed on top + `HUMMINGBIRD_PLUGIN=openapis_dodp`
+  pip-installed on top + `HUMMINGBIRD_PLUGIN=openapi_dodp`
   default. No native deps (pure-wheel httpx + lxml +
   pydantic-settings).
 - **docker-compose.yaml** — references the kibble-published
   image; exposes the operator-mandatory
-  `OPENAPIS_DODP_BASE_URL` env var via a shell variable so a
+  `OPENAPI_DODP_BASE_URL` env var via a shell variable so a
   missing value is obvious at `docker compose config` time.
 
 ## [0.1.1] - 2026-05-18
 
 ### Fixed
 
-- **Graceful degrade when `OPENAPIS_DODP_BASE_URL` is unset.**
+- **Graceful degrade when `OPENAPI_DODP_BASE_URL` is unset.**
   v0.1.0 raised `ValueError` from `__init__`, which
   hummingbird's loader caught and silently dropped the plugin.
   Operators saw a stacktrace + no clear "plugin disabled"

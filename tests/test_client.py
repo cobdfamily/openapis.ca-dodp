@@ -13,7 +13,7 @@ import httpx
 import pytest
 from lxml import etree
 
-from openapis_ca_dodp.client import (
+from openapi_dodp.client import (
     DEFAULT_DODP_NS,
     DodpAuthFault,
     DodpClient,

@@ -41,7 +41,7 @@ from lxml import etree
 # DODP v1 + v2 share the same namespace string; the version
 # negotiation lives in getServiceAttributes payload bodies. Some
 # DAISY-Consortium pre-release servers used "/v2/" suffix --
-# operators override via OPENAPIS_DODP_NAMESPACE.
+# operators override via OPENAPI_DODP_NAMESPACE.
 DEFAULT_DODP_NS = "http://www.daisy.org/ns/daisy-online/"
 
 SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/"
@@ -116,7 +116,7 @@ class DodpClient:
         base_url: str,
         *,
         namespace: str = DEFAULT_DODP_NS,
-        user_agent: str = "openapis.ca-dodp/0.1",
+        user_agent: str = "openapi-dodp/0.1",
         timeout_seconds: float = 30.0,
     ) -> None:
         if not base_url:

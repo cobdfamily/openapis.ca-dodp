@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          path: openapis.ca-dodp
+          path: openapi-dodp
       - uses: actions/checkout@v5
         with:
           repository: cobdfamily/hummingbird
@@ -39,12 +39,12 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with: { version: latest, enable-cache: true }
       - run: uv python install 3.12
-        working-directory: openapis.ca-dodp
+        working-directory: openapi-dodp
       - run: uv sync --frozen
-        working-directory: openapis.ca-dodp
+        working-directory: openapi-dodp
       - name: ruff check
         run: uv run ruff check src tests
-        working-directory: openapis.ca-dodp
+        working-directory: openapi-dodp
 
   pytest:
     runs-on: ubuntu-latest
@@ -52,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          path: openapis.ca-dodp
+          path: openapi-dodp
       - uses: actions/checkout@v5
         with:
           repository: cobdfamily/hummingbird
@@ -60,18 +60,18 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with: { version: latest, enable-cache: true }
       - run: uv python install 3.12
-        working-directory: openapis.ca-dodp
+        working-directory: openapi-dodp
       - run: uv sync --frozen
-        working-directory: openapis.ca-dodp
+        working-directory: openapi-dodp
       - name: pytest with coverage
         run: uv run pytest -q --cov --cov-report=term --cov-report=xml
-        working-directory: openapis.ca-dodp
+        working-directory: openapi-dodp
 
       - name: upload coverage report
         uses: actions/upload-artifact@v4
         with:
           name: coverage-xml
-          path: openapis.ca-dodp/coverage.xml
+          path: openapi-dodp/coverage.xml
           if-no-files-found: warn
 
   image:
@@ -95,6 +95,6 @@ jobs:
           context: .
           push: false
           platforms: linux/amd64
-          tags: cobdfamily/openapis.ca-dodp:ci
+          tags: cobdfamily/openapi-dodp:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max

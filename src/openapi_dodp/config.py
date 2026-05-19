@@ -1,6 +1,6 @@
 """Plugin config.
 
-Reads OPENAPIS_DODP_* env vars (and a .env at the working dir
+Reads OPENAPI_DODP_* env vars (and a .env at the working dir
 when present) so an operator can switch the backend without
 rebuilding the image. Empty ``base_url`` is a fatal misconfig
 -- the plugin refuses to start so an operator sees the problem
@@ -15,7 +15,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="OPENAPIS_DODP_",
+        env_prefix="OPENAPI_DODP_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     # User-Agent header on every SOAP call. Some DODP servers
     # require an identifying string (DAISY clients usually send
     # the player's model name + firmware).
-    user_agent: str = "openapis.ca-dodp/0.1"
+    user_agent: str = "openapi-dodp/0.1"
 
     # Per-call timeout for the SOAP HTTP request. Generous default
     # because some DODP servers are slow on getContentList for

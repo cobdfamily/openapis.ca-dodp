@@ -3,7 +3,7 @@ name: release
 # Builds and pushes the container image to the kibble registry
 # on every git tag matching v*. Tagged twice: with the version
 # (v0.6.0 -> 0.6.0) and as `latest`. Deploy hosts pull from
-# kibble.apps.blindhub.ca/cobdfamily/openapis.ca-dodp:<version>.
+# kibble.apps.blindhub.ca/cobdfamily/openapi-dodp:<version>.
 #
 # The kibble registry is anonymous-push for the cobdfamily/*
 # path and speaks plain HTTP, so buildkit is configured to talk
@@ -24,7 +24,7 @@ on:
 
 env:
   REGISTRY: kibble.apps.blindhub.ca
-  IMAGE: cobdfamily/openapis.ca-dodp
+  IMAGE: cobdfamily/openapi-dodp
 
 jobs:
   push:

@@ -1,48 +1,48 @@
-# Production deploy for openapis.ca-dodp.
+# Production deploy for openapi-dodp.
 #
 # Pulls the published image from the cobdfamily kibble registry.
 # The plugin is baked in at build time and HUMMINGBIRD_PLUGIN is
-# defaulted to openapis_dodp, so `docker compose up -d` is the
+# defaulted to openapi_dodp, so `docker compose up -d` is the
 # entire deploy. The one mandatory operator-supplied value is
-# OPENAPIS_DODP_BASE_URL -- pointing at the upstream DODP SOAP
+# OPENAPI_DODP_BASE_URL -- pointing at the upstream DODP SOAP
 # service (Kolibre KADOS or any other DODP-conformant impl).
 #
-# Pin a version via OPENAPIS_DODP_TAG:
-#     OPENAPIS_DODP_TAG=0.1.0 docker compose up -d
+# Pin a version via OPENAPI_DODP_TAG:
+#     OPENAPI_DODP_TAG=0.1.0 docker compose up -d
 #
 # Local dev: uncomment the `build:` block to rebuild from this
 # checkout off the kibble hummingbird base image. CI uses
 # release.yml to build and push to kibble directly.
 
 services:
-  openapis-dodp:
-    image: kibble.apps.blindhub.ca/cobdfamily/openapis.ca-dodp:${OPENAPIS_DODP_TAG:-latest}
+  openapi-dodp:
+    image: kibble.apps.blindhub.ca/cobdfamily/openapi-dodp:${OPENAPI_DODP_TAG:-latest}
     # build:
     #   context: .
     #   dockerfile: Dockerfile
     #   args:
-    #     HUMMINGBIRD_TAG: "${OPENAPIS_DODP_HUMMINGBIRD_TAG:-latest}"
-    container_name: openapis-dodp
+    #     HUMMINGBIRD_TAG: "${OPENAPI_DODP_HUMMINGBIRD_TAG:-latest}"
+    container_name: openapi-dodp
     ports:
-      - "${OPENAPIS_DODP_HTTP_PORT:-8000}:8000"
+      - "${OPENAPI_DODP_HTTP_PORT:-8000}:8000"
     environment:
       # The mandatory knob. Empty -> plugin loads but every hook
       # returns its empty fallback (and logs a warning at boot).
       # An operator who sees "no books for any user" should
       # check this value first.
-      OPENAPIS_DODP_BASE_URL: "${OPENAPIS_DODP_BASE_URL:-}"
+      OPENAPI_DODP_BASE_URL: "${OPENAPI_DODP_BASE_URL:-}"
 
       # Optional knobs. The defaults match the DODP v2.0.2 spec
       # + Kolibre KADOS conventions; override only when pointing
       # at a non-conformant backend.
-      OPENAPIS_DODP_NAMESPACE: "${OPENAPIS_DODP_NAMESPACE:-http://www.daisy.org/ns/daisy-online/}"
-      OPENAPIS_DODP_BOOKSHELF_LIST_ID: "${OPENAPIS_DODP_BOOKSHELF_LIST_ID:-issued}"
-      OPENAPIS_DODP_USER_AGENT: "${OPENAPIS_DODP_USER_AGENT:-openapis.ca-dodp/0.1}"
-      OPENAPIS_DODP_REQUEST_TIMEOUT_SECONDS: "${OPENAPIS_DODP_REQUEST_TIMEOUT_SECONDS:-30}"
+      OPENAPI_DODP_NAMESPACE: "${OPENAPI_DODP_NAMESPACE:-http://www.daisy.org/ns/daisy-online/}"
+      OPENAPI_DODP_BOOKSHELF_LIST_ID: "${OPENAPI_DODP_BOOKSHELF_LIST_ID:-issued}"
+      OPENAPI_DODP_USER_AGENT: "${OPENAPI_DODP_USER_AGENT:-openapi-dodp/0.1}"
+      OPENAPI_DODP_REQUEST_TIMEOUT_SECONDS: "${OPENAPI_DODP_REQUEST_TIMEOUT_SECONDS:-30}"
 
-      # The image already sets HUMMINGBIRD_PLUGIN=openapis_dodp
+      # The image already sets HUMMINGBIRD_PLUGIN=openapi_dodp
       # by default; included here for visibility.
-      HUMMINGBIRD_PLUGIN: openapis_dodp
+      HUMMINGBIRD_PLUGIN: openapi_dodp
 
       # Hummingbird's standalone-fallback creds are unused once
       # this plugin's authenticate() runs, but pydantic-settings
@@ -52,14 +52,14 @@ services:
     volumes:
       # Bookshelf/session state hummingbird writes to disk
       # (per-user JSON files). Survives container rebuilds.
-      - openapis-dodp-data:/app/data
+      - openapi-dodp-data:/app/data
       # Downloaded book audio cache. Same survival policy --
       # operators can prune by tearing down the volume.
-      - openapis-dodp-cache:/app/cache
+      - openapi-dodp-cache:/app/cache
     restart: unless-stopped
 
 volumes:
-  openapis-dodp-data:
-    name: openapis-dodp-data
-  openapis-dodp-cache:
-    name: openapis-dodp-cache
+  openapi-dodp-data:
+    name: openapi-dodp-data
+  openapi-dodp-cache:
+    name: openapi-dodp-cache
