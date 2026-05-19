@@ -29,10 +29,10 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           path: openapi-dodp
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           repository: cobdfamily/hummingbird
           path: hummingbird
@@ -50,10 +50,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           path: openapi-dodp
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           repository: cobdfamily/hummingbird
           path: hummingbird
@@ -79,7 +79,7 @@ jobs:
     needs: [lint]
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: set up buildx (for kibble base pull over plain HTTP)
         uses: docker/setup-buildx-action@v3
