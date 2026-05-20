@@ -1,30 +1,20 @@
 name: sbom
 
-# CycloneDX 1.6 SBOM (Software Bill of Materials).
+# CycloneDX 1.6 SBOM, sibling-checkout variant.
 #
-# Generated against the uv-synced environment + the
-# pyproject.toml metadata. Uploaded as a build artifact
-# on every push to main and every tag matching v*.
+# Same shape as the canonical sbom.yml shipped across
+# the rest of the Python+uv fleet, with one difference:
+# this repo's pyproject.toml has a [tool.uv.sources]
+# entry pointing `hummingbird` at `../hummingbird`. The
+# sibling has to be checked out at the right relative
+# path before `uv sync --frozen` will resolve it.
+# Matches the dual-checkout pattern used by this repo's
+# test.yml.
 #
-# Tooling: cyclonedx-bom (PyPI) installed via uv tool;
-# its CLI is `cyclonedx-py`. The `environment` subcommand
-# walks the .venv python interpreter and emits CycloneDX
-# 1.6 JSON. --pyproject lets the tool pick up the project's
-# own name + version + licence (PEP 621) as the root
-# component; --output-reproducible drops time/random
-# fields so artifact-diffs across CI runs are meaningful.
-#
-# Why this exists: secrets-manager-evaluation +
-# IT-stack-maturity reports (2026-05-19) both flagged
-# "no SBOM = no CVE-response posture". This workflow
-# is step 1 of three: (1) generate, (2) push to kibble
-# alongside the image via OCI 1.1 referrers, (3) daily
-# Grype/Trivy scan against the registry.
-#
-# Cross-repo: every Python+uv service in the cobdfamily
-# fleet ships the SAME file. A change here should be
-# applied to all of them so the artifact shape stays
-# consistent for downstream scanners.
+# If hummingbird is later refactored to publish via
+# PyPI (or kibble's python index) and this repo stops
+# needing the sibling, swap this file for the canonical
+# sbom.yml.
 
 on:
   push:
@@ -37,13 +27,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          path: ${{ github.event.repository.name }}
+      - uses: actions/checkout@v6
+        with:
+          repository: cobdfamily/hummingbird
+          path: hummingbird
       - uses: astral-sh/setup-uv@v6
         with:
           version: latest
           enable-cache: true
       - name: Sync dependencies
         run: uv sync --frozen
+        working-directory: ${{ github.event.repository.name }}
       - name: Generate CycloneDX SBOM
+        working-directory: ${{ github.event.repository.name }}
         run: |
           uv tool install cyclonedx-bom
           cyclonedx-py environment .venv/bin/python \
@@ -51,11 +49,7 @@ jobs:
             --output-reproducible \
             --output-file bom.cdx.json
       - name: Validate SBOM has components
-        # Belt-and-suspenders: a zero-component SBOM is
-        # almost certainly a tooling regression. Fail
-        # the workflow if .components is missing or
-        # empty so a silent broken-SBOM run shows up
-        # in CI red rather than as a 200-byte artifact.
+        working-directory: ${{ github.event.repository.name }}
         run: |
           components=$(jq '.components | length' bom.cdx.json)
           echo "SBOM contains $components components"
@@ -67,6 +61,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sbom-${{ github.ref_name }}
-          path: bom.cdx.json
+          path: ${{ github.event.repository.name }}/bom.cdx.json
           retention-days: 90
           if-no-files-found: error
