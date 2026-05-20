@@ -72,6 +72,38 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Attach a CycloneDX 1.6 SBOM alongside the image in
+      # kibble via the OCI 1.1 referrers API. syft against a
+      # locally-loaded single-arch build (the multi-arch push
+      # above can't load into the docker daemon; we rebuild
+      # amd64 with the gha cache so it's near-free). Matches
+      # the syft variant used in this repo's sbom.yml. See
+      # state-of-the-stack-2026-05-20 Part X step 2.
+      - name: build single-arch image for SBOM scan
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          platforms: linux/amd64
+          tags: cobdfamily-sbom:scan
+          cache-from: type=gha
+      - name: generate CycloneDX SBOM with syft
+        uses: anchore/sbom-action@v0
+        with:
+          image: cobdfamily-sbom:scan
+          format: cyclonedx-json
+          output-file: bom.cdx.json
+      - name: install oras
+        uses: oras-project/setup-oras@v1
+      - name: attach SBOM as OCI 1.1 referrer
+        run: |
+          oras attach \
+            --artifact-type application/vnd.cyclonedx+json \
+            --plain-http \
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.ver.outputs.version }} \
+            bom.cdx.json:application/vnd.cyclonedx+json
+
       - name: summary
         run: |
           {
@@ -79,4 +111,10 @@ jobs:
             echo ""
             echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.ver.outputs.version }}\`"
             echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE }}:latest\`"
+            echo ""
+            echo "### SBOM attached (syft scan of single-arch build)"
+            echo ""
+            echo "- artifact-type \`application/vnd.cyclonedx+json\`"
+            echo "- discover via:"
+            echo "  \`oras discover --plain-http ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.ver.outputs.version }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
