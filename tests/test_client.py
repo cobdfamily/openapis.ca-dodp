@@ -204,16 +204,18 @@ async def test_issue_content_returns_true(make_http):
 
 
 async def test_return_content_returns_false_without_result_element(make_http):
-    # Edge case: server omits the *Result wrapper. Our client
-    # treats that as "fault-less so True" -- pin the behavior so
-    # we don't accidentally regress to False on real servers.
+    # Fail-closed on missing *Result wrapper. The previous "fault-less
+    # so True" behavior combined with _unwrap_body's first-child
+    # fallback to create a log_on() fail-open: any 200 SOAP body
+    # without a Fault would silently authenticate. Strict missing-
+    # element-is-False prevents that.
     def handler(_: httpx.Request) -> httpx.Response:
         body = f'<returnContentResponse xmlns="{DNS}"/>'
         return httpx.Response(200, text=soap_envelope(body))
 
     async with make_http(handler) as http:
         ok = await _client().return_content(http, "con-1")
-    assert ok is True
+    assert ok is False
 
 
 # -- error paths --------------------------------------------

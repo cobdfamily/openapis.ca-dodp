@@ -31,11 +31,14 @@ from "library returned an error".
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from lxml import etree
+
+logger = logging.getLogger(__name__)
 
 
 # DODP v1 + v2 share the same namespace string; the version
@@ -46,6 +49,28 @@ DEFAULT_DODP_NS = "http://www.daisy.org/ns/daisy-online/"
 
 SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/"
 _XML_DECL = b'<?xml version="1.0" encoding="UTF-8"?>\n'
+
+
+# Hardened parser for upstream SOAP responses. The defaults on
+# ``etree.fromstring`` accept DTDs and (depending on libxml2 version)
+# resolve external entities -- billion-laughs DoS and historical XXE
+# CVEs both apply. We don't need either for DODP: the protocol uses
+# no DTDs and no entities. Lock both off plus ``no_network`` (don't
+# fetch external DTDs even if one is declared) and ``huge_tree``
+# (already off by default but explicit > implicit for security).
+_PARSER = etree.XMLParser(
+    resolve_entities=False,
+    no_network=True,
+    load_dtd=False,
+    huge_tree=False,
+    recover=False,
+)
+
+
+def _parse_xml(content: bytes) -> etree._Element:
+    """Parse upstream SOAP with the hardened parser. Centralized so the
+    two call sites in ``_call`` can't drift apart on settings."""
+    return etree.fromstring(content, _PARSER)
 
 
 class DodpFault(RuntimeError):
@@ -446,7 +471,7 @@ class DodpClient:
             # Some impls still return a SOAP envelope on 500 with
             # a Fault inside; try parsing first.
             try:
-                root = etree.fromstring(response.content)
+                root = _parse_xml(response.content)
             except etree.XMLSyntaxError:
                 raise DodpFault(
                     f"HTTP {response.status_code} from {method}: "
@@ -467,7 +492,7 @@ class DodpClient:
             )
 
         try:
-            root = etree.fromstring(response.content)
+            root = _parse_xml(response.content)
         except etree.XMLSyntaxError as exc:
             raise DodpFault(
                 f"malformed XML from {method}: {exc}",
@@ -531,13 +556,24 @@ class DodpClient:
         if resp is not None:
             return resp
         # Fall back to the first child of body (some non-conformant
-        # servers omit the Response wrapper).
+        # servers omit the Response wrapper). Log a warning so operators
+        # see protocol drift -- combined with _result_bool's strict
+        # "missing result element = False" rule below, this prevents
+        # the historic fail-open path where a server returning
+        # <soap:Body><randomElement/></soap:Body> made log_on() return
+        # True for any 200 response without a Fault.
         first_child = next(iter(body), None)
         if first_child is None:
             raise DodpFault(
                 f"empty soap:Body in response to {method}",
                 faultcode="Client",
             )
+        logger.warning(
+            "DODP %s response missing expected %sResponse wrapper; "
+            "fell back to first body child %s. This may indicate a "
+            "non-conformant upstream or a protocol drift.",
+            method, method, etree.QName(first_child).localname,
+        )
         return first_child
 
     def _raise_for_fault(
@@ -581,15 +617,28 @@ class DodpClient:
 
     def _result_bool(self, root: etree._Element, method: str) -> bool:
         """Most boolean-returning DODP methods wrap the result in
-        ``<methodResult>true|false</methodResult>``. Some impls
-        drop the wrapper. Return False on missing or non-truthy
-        values so callers see "the upstream said no" rather than
-        an exception."""
+        ``<methodResult>true|false</methodResult>``. Return False on
+        missing or non-truthy values: fail-closed on missing wrapper
+        prevents the historic ``log_on`` fail-open where a server
+        returning ``<soap:Body><randomElement/></soap:Body>`` combined
+        with ``_unwrap_body``'s first-child fallback would silently
+        authenticate. For mutating/auth methods, "no explicit result"
+        is unsafe to treat as success."""
         result_el = root.find(f"{{{self.namespace}}}{method}Result")
         if result_el is None:
-            # No explicit result element; assume the operation
-            # succeeded if no fault was raised.
-            return True
+            # Try the iter() fallback for impls that nest the result
+            # under an extra <return> wrapper or similar. Still strict:
+            # only the namespaced exact-name match counts.
+            result_el = next(
+                root.iter(f"{{{self.namespace}}}{method}Result"), None,
+            )
+        if result_el is None:
+            logger.warning(
+                "DODP %s response had no <%sResult> element; treating "
+                "as False (fail-closed).",
+                method, method,
+            )
+            return False
         return (result_el.text or "").strip().lower() == "true"
 
     def _element_to_dict(self, element: etree._Element) -> dict[str, Any]:
