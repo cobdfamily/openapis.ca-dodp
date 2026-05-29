@@ -1,6 +1,6 @@
 [project]
 name = "openapi-dodp"
-version = "0.10.0"
+version = "0.10.1"
 description = "Hummingbird plugin that proxies to a DAISY Online Delivery Protocol (DODP) backend"
 readme = "README.md"
 license = "AGPL-3.0"
